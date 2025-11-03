@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kubernetes Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🚀 Kubernetes Dashboard</h1>
+            <div class="header-controls">
+                <div class="namespace-selector">
+                    <label for="namespace">Namespace:</label>
+                    <select id="namespace">
+                        <option value="default">default</option>
+                        <option value="kube-system">kube-system</option>
+                        <option value="kubernetes-dashboard">kubernetes-dashboard</option>
+                    </select>
+                </div>
+                <div class="search-container">
+                    <input type="text" id="search-input" placeholder="🔍 Search pods..." autocomplete="off">
+                    <button id="clear-search" class="btn btn-secondary" style="display: none;">✕</button>
+                </div>
+                <div class="actions">
+                    <button id="refresh-btn" class="btn btn-primary" title="Refresh pods (F5)">
+                        <span class="spinner" style="display: none;"></span>
+                        🔄 Refresh
+                    </button>
+                    <button id="create-btn" class="btn btn-success" title="Create new pod (Ctrl+N)">➕ Create Pod</button>
+                    <button id="logs-btn" class="btn btn-info" title="View pod logs" style="display: none;">📋 Logs</button>
+                </div>
+            </div>
+        </header>
+
+        <main>
+            <div class="status-bar">
+                <div class="status-info">
+                    <span id="status">Loading...</span>
+                    <span id="connection-status" class="connection-status">
+                        <span class="connection-dot" id="connection-dot"></span>
+                        <span id="connection-text">Connecting...</span>
+                    </span>
+                </div>
+                <div class="pod-stats">
+                    <span id="pod-count">0 pods</span>
+                    <span id="filtered-count" style="display: none;">(0 filtered)</span>
+                </div>
+            </div>
+
+            <div class="table-container">
+                <table id="pods-table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Status</th>
+                            <th>Ready</th>
+                            <th>Restarts</th>
+                            <th>Age</th>
+                            <th>Node</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="pods-body">
+                        <tr>
+                            <td colspan="7" class="loading">
+                                <div class="loading-spinner"></div>
+                                Loading pods...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </main>
+    </div>
+
+    <!-- Create/Edit Pod Modal -->
+    <div id="pod-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modal-title">Create Pod</h2>
+                <span class="close">&times;</span>
+            </div>
+            <div class="modal-body">
+                <form id="pod-form">
+                    <div class="form-group">
+                        <label for="pod-name">Name:</label>
+                        <input type="text" id="pod-name" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="pod-image">Image:</label>
+                        <input type="text" id="pod-image" value="nginx:alpine" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="pod-namespace">Namespace:</label>
+                        <input type="text" id="pod-namespace" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="container-port">Container Port:</label>
+                        <input type="number" id="container-port" value="80">
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button id="modal-cancel" class="btn btn-secondary">Cancel</button>
+                <button id="modal-save" class="btn btn-primary">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Pod Details Modal -->
+    <div id="details-modal" class="modal">
+        <div class="modal-content large">
+            <div class="modal-header">
+                <h2 id="details-title">Pod Details</h2>
+                <span class="close">&times;</span>
+            </div>
+            <div class="modal-body">
+                <pre id="pod-details">Loading...</pre>
+            </div>
+            <div class="modal-footer">
+                <button id="details-close" class="btn btn-secondary">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Pod Logs Modal -->
+    <div id="logs-modal" class="modal">
+        <div class="modal-content large logs-modal">
+            <div class="modal-header">
+                <h2 id="logs-title">Pod Logs</h2>
+                <div class="logs-controls">
+                    <select id="logs-container">
+                        <option value="">All containers</option>
+                    </select>
+                    <label>
+                        <input type="checkbox" id="logs-follow"> Follow
+                    </label>
+                    <button id="logs-refresh" class="btn btn-secondary">🔄 Refresh</button>
+                </div>
+                <span class="close">&times;</span>
+            </div>
+            <div class="modal-body">
+                <pre id="logs-content" class="logs-content">Loading logs...</pre>
+            </div>
+            <div class="modal-footer">
+                <button id="logs-close" class="btn btn-secondary">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
