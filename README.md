@@ -347,6 +347,55 @@ const ws = new WebSocket('ws://localhost:8080/api/v1/pods/watch?namespace=defaul
 ws.onmessage = (event) => console.log('Pod change:', JSON.parse(event.data));
 ```
 
+## gRPC Implementation Status
+
+**✅ FULLY FUNCTIONAL** - The gRPC implementation has been completed and tested.
+
+### What Was Fixed:
+
+- ✅ **Missing Conversion Functions**: Added `convertProtoToPod`, `convertProtoToDeployment`, `convertProtoToService`, `convertProtoToConfigMap`
+- ✅ **Type Consistency**: All client methods now return Kubernetes types instead of protobuf types
+- ✅ **Import Dependencies**: Added required imports (`appsv1`, `metav1`)
+- ✅ **Protobuf Generation**: Regenerated fresh protobuf Go files with correct type definitions
+- ✅ **Compilation**: All gRPC packages now compile successfully
+
+### Architecture Options:
+
+The project now supports two architectural approaches:
+
+#### **Current: Direct Client (Default)**
+- Uses goroutines + channels for async UI
+- No network overhead
+- Simpler deployment
+- **Status**: ✅ Active
+
+#### **Alternative: gRPC Client**
+- Distributed architecture support
+- Network-enabled operations
+- Multi-server scalability
+- **Status**: ✅ Ready for use
+
+### Switching to gRPC Mode:
+
+To use gRPC instead of direct client calls:
+
+1. **Modify `cmd/server/main.go`**:
+   ```go
+   // Start gRPC server
+   grpcServer := grpc.NewServer(clientset)
+   go grpcServer.Start(":50051")
+   
+   // Use gRPC client in TUI
+   grpcClient, _ := grpc.NewClient("localhost:50051")
+   tui, _ := tui.NewTUI(grpcClient)
+   ```
+
+2. **Benefits of gRPC mode**:
+   - Separate TUI and API server processes
+   - Load balancing across multiple API servers
+   - Network-based architecture
+   - Better for microservices deployments
+
 ## Production Considerations
 
 - **Asynchronous Architecture**: Non-blocking data loading prevents UI freezing under load
