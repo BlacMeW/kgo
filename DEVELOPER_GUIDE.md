@@ -2,7 +2,7 @@
 
 ## Overview
 
-KGO is a comprehensive Kubernetes dashboard built in Go that provides multiple interfaces (REST API, Terminal UI, and Web UI) for managing Kubernetes resources. This guide provides detailed information for developers who want to contribute to, extend, or maintain the project.
+KGO is a comprehensive Kubernetes dashboard built in Go that provides multiple interfaces (REST API and Terminal UI) for managing Kubernetes resources. This guide provides detailed information for developers who want to contribute to, extend, or maintain the project.
 
 ## Architecture
 
@@ -19,7 +19,6 @@ k8s-dashboard/
 │   ├── config/          # Configuration management
 │   ├── metrics/         # Metrics collection and reporting
 │   └── utils/           # Shared utilities
-├── web/                 # Static web assets (HTML/CSS/JS)
 ├── proto/               # Protocol buffer definitions
 └── test scripts         # Integration and testing scripts
 ```
@@ -29,7 +28,7 @@ k8s-dashboard/
 - **Modular Architecture**: Clean separation of concerns with independent packages
 - **Asynchronous Operations**: Non-blocking UI with concurrent data loading
 - **Extensible Design**: Easy to add new resource types and interfaces
-- **Multiple Interfaces**: REST API, TUI, and Web UI for different use cases
+- **Multiple Interfaces**: REST API and TUI for different use cases
 - **Production Ready**: Proper error handling, logging, and monitoring
 
 ## Development Setup
@@ -61,9 +60,6 @@ k8s-dashboard/
 
 4. **Run in development mode**
    ```bash
-   # Web UI mode (default)
-   ./kgo -kubeconfig=/path/to/kubeconfig
-
    # Terminal UI mode
    ./kgo -tui -kubeconfig=/path/to/kubeconfig
    ```
@@ -308,16 +304,6 @@ service KubernetesService {
 }
 ```
 
-### 6. Update Web UI (web/)
-
-Update `app.js` to handle the new resource type:
-```javascript
-// Add to resource type handling
-case 'newresource':
-    // Implementation
-    break;
-```
-
 ## Testing
 
 ### Unit Tests
@@ -431,37 +417,9 @@ type Theme struct {
 }
 ```
 
-## Web UI Development
-
-### File Structure
-
+### Kubernetes Deployment
+}
 ```
-web/
-├── index.html    # Main HTML structure
-├── style.css     # CSS styling
-└── app.js        # JavaScript functionality
-```
-
-### Adding New Features
-
-1. **Update HTML**: Add new elements to `index.html`
-2. **Update CSS**: Add styles to `style.css`
-3. **Update JavaScript**: Add functionality to `app.js`
-
-### WebSocket Integration
-
-```javascript
-// Connect to WebSocket
-const ws = new WebSocket('ws://localhost:8080/api/v1/pods/watch?namespace=default');
-
-// Handle messages
-ws.onmessage = (event) => {
-    const change = JSON.parse(event.data);
-    updatePodTable(change);
-};
-
-// Send messages
-ws.send(JSON.stringify({action: 'subscribe', resource: 'pods'}));
 ```
 
 ## Deployment
@@ -480,7 +438,6 @@ FROM alpine:latest
 RUN apk --no-cache add ca-certificates
 WORKDIR /root/
 COPY --from=builder /app/kgo .
-COPY --from=builder /app/web ./web
 CMD ["./kgo"]
 ```
 
@@ -490,16 +447,16 @@ CMD ["./kgo"]
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: kgo-dashboard
+  name: kgo
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: kgo-dashboard
+      app: kgo
   template:
     metadata:
       labels:
-        app: kgo-dashboard
+        app: kgo
     spec:
       serviceAccountName: kgo-service-account
       containers:
@@ -520,6 +477,7 @@ spec:
 ```
 
 ## Contributing Guidelines
+```
 
 ### Code Style
 
@@ -563,11 +521,6 @@ refactor: improve async loading architecture
 - Check kubeconfig path
 - Verify cluster connectivity with `kubectl get pods`
 - Check Go version (1.24+ required)
-
-**Web UI not loading:**
-- Check server port (default 8080)
-- Verify static file serving
-- Check browser console for errors
 
 **API errors:**
 - Check namespace permissions

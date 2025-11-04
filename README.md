@@ -1,6 +1,6 @@
 # KGO - Advanced Kubernetes Dashboard
 
-**KGO** is a comprehensive Go-based Kubernetes dashboard that provides **REST API**, **Advanced Terminal User Interface (TUI)**, and **Modern Web UI** for managing Kubernetes resources with enterprise-grade features.
+**KGO** is a comprehensive Go-based Kubernetes dashboard that provides **REST API** and **Advanced Terminal User Interface (TUI)** for managing Kubernetes resources with enterprise-grade features.
 
 ## Key Highlights
 
@@ -8,29 +8,27 @@
 - 🎨 **Advanced TUI**: Feature-rich terminal interface with theming, filtering, and multi-view support
 - 📊 **Full Resource Support**: Pods, Deployments, Services, ConfigMaps, and Namespaces
 - 🔄 **Real-time Updates**: WebSocket streaming and background data refresh
-- 🏗️ **Modular Design**: Clean architecture with separate concerns for API, TUI, and web interfaces
+- 🏗️ **Modular Design**: Clean architecture with separate concerns for API and TUI interfaces
 - ⚡ **Performance Optimized**: Concurrent operations and efficient Kubernetes API usage
 
 ## Features
 
 - Connect to any Kubernetes cluster using kubeconfig
-- **Triple Interface**: REST API, Terminal UI, and Web UI
+- **Dual Interface**: REST API and Terminal UI
 - **Full Resource Support**: Pods, Deployments, Services, and ConfigMaps
 - **Asynchronous Data Loading**: Non-blocking UI with concurrent resource fetching
 - CRUD operations on all supported resources
 - Real-time event streaming via WebSocket
 - REST API with Gin
 - **Advanced TUI**: Interactive terminal interface with filtering, theming, and multi-view support
-- Modern Web UI with HTML/CSS/JavaScript
 - Proper error handling and logging with klog
 - Modular structure
 
 ## Project Structure
 
 ```
-```
 k8s-dashboard/
-├── cmd/server/main.go       # Main application with web/TUI modes
+├── cmd/server/main.go       # Main application with TUI mode
 ├── pkg/
 │   ├── api/                 # REST API handlers for all resources
 │   ├── k8s/client.go        # Kubernetes client operations
@@ -38,15 +36,10 @@ k8s-dashboard/
 │   ├── config/              # Configuration management
 │   ├── metrics/             # Metrics and monitoring
 │   └── grpc/                # gRPC support (optional)
-├── web/
-│   ├── index.html          # Web UI HTML
-│   ├── style.css           # Web UI styles
-│   └── app.js              # Web UI JavaScript
 ├── proto/                   # Protocol buffer definitions
 ├── go.mod                   # Dependencies
 ├── test_integration.sh     # Integration tests
 └── README.md               # This file
-```
 ```
 
 ## Running the Application
@@ -65,32 +58,6 @@ k8s-dashboard/
 5. The server will start on port 8080.
 
 ## Usage
-
-### Web UI Mode (Default)
-
-```bash
-./bin/server -kubeconfig=/path/to/kubeconfig
-```
-
-Access the web interface at: http://localhost:8080
-
-#### Web UI Features
-
-- **Modern Interface**: Clean, responsive design with dark theme
-- **Real-time Updates**: WebSocket connection for live pod changes
-- **CRUD Operations**: Create, view, edit, and delete pods
-- **Namespace Management**: Switch between namespaces
-- **Pod Details**: View complete pod specifications in JSON format
-- **Status Indicators**: Color-coded pod status (Running, Pending, Failed)
-- **Responsive Design**: Works on desktop and mobile devices
-
-#### Web UI Screenshots
-
-The web UI includes:
-- Header with namespace selector and action buttons
-- Pod table with status, readiness, age, and node information
-- Modal dialogs for pod creation/editing and details viewing
-- Real-time status updates and connection indicators
 
 ### Terminal UI Mode
 

@@ -59,10 +59,6 @@ func main() {
 		r := gin.Default()
 		r.Use(cors.Default())
 
-		// Serve static web UI files
-		r.Static("/web", "./web")
-		r.StaticFile("/", "./web/index.html")
-
 		v1 := r.Group("/api/v1")
 		{
 			// Pod operations
@@ -97,8 +93,7 @@ func main() {
 			v1.GET("/metrics/namespace/:namespace", metricsHandler.GetNamespaceMetrics)
 		}
 
-		klog.Info("Starting web server on :" + cfg.Server.Port)
-		klog.Info("Web UI available at: http://localhost:" + cfg.Server.Port)
+		klog.Info("Starting API server on :" + cfg.Server.Port)
 		r.Run(":" + cfg.Server.Port)
 	}
 }
