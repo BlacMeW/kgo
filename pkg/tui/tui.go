@@ -23,6 +23,7 @@ type DataUpdate struct {
 	Deployments  []appsv1.Deployment
 	Services     []v1.Service
 	ConfigMaps   []v1.ConfigMap
+	Namespaces   []v1.Namespace
 	Error        error
 }
 
@@ -34,6 +35,7 @@ const (
 	ResourceDeployments
 	ResourceServices
 	ResourceConfigMaps
+	ResourceNamespaces
 )
 
 // ViewMode represents different view modes
@@ -138,6 +140,8 @@ func (rt ResourceType) DisplayName() string {
 		return "Services"
 	case ResourceConfigMaps:
 		return "ConfigMaps"
+	case ResourceNamespaces:
+		return "Namespaces"
 	default:
 		return "Unknown"
 	}
@@ -180,6 +184,7 @@ type TUI struct {
 	deployments []appsv1.Deployment
 	services    []v1.Service
 	configMaps  []v1.ConfigMap
+	namespaces  []v1.Namespace
 
 	// Scrolling
 	detailsScroll       int
@@ -332,7 +337,7 @@ func (t *TUI) Run() error {
 					t.viewMode = ViewModeDetails
 				}
 			case tcell.KeyTab:
-				t.currentView = ResourceType((int(t.currentView) + 1) % 4)
+				t.currentView = ResourceType((int(t.currentView) + 1) % 5)
 				t.selected = 0
 			case tcell.KeyF5:
 				t.refreshData()
@@ -365,6 +370,9 @@ func (t *TUI) Run() error {
 					t.selected = 0
 				case '4':
 					t.currentView = ResourceConfigMaps
+					t.selected = 0
+				case '5':
+					t.currentView = ResourceNamespaces
 					t.selected = 0
 				case 'v':
 					t.nextViewMode()
@@ -410,7 +418,7 @@ func (t *TUI) loadPods() error {
 // refreshData loads all resource types asynchronously
 func (t *TUI) refreshData() error {
 	t.loading = true
-	t.loadingCounter = 4 // 4 resource types
+	t.loadingCounter = 5 // 5 resource types
 	t.draw()
 	t.screen.Show()
 
@@ -419,12 +427,14 @@ func (t *TUI) refreshData() error {
 	t.deployments = nil
 	t.services = nil
 	t.configMaps = nil
+	t.namespaces = nil
 
 	// Start async loading
 	go t.loadPodsAsync()
 	go t.loadDeploymentsAsync()
 	go t.loadServicesAsync()
 	go t.loadConfigMapsAsync()
+	go t.loadNamespacesAsync()
 
 	return nil
 }
@@ -468,6 +478,17 @@ func (t *TUI) loadConfigMapsAsync() {
 	update := &DataUpdate{
 		ResourceType: ResourceConfigMaps,
 		ConfigMaps:   configMaps,
+		Error:        err,
+	}
+	t.dataChan <- update
+}
+
+// loadNamespacesAsync loads namespaces asynchronously
+func (t *TUI) loadNamespacesAsync() {
+	namespaces, err := k8s.ListNamespaces(t.clientset)
+	update := &DataUpdate{
+		ResourceType: ResourceNamespaces,
+		Namespaces:   namespaces,
 		Error:        err,
 	}
 	t.dataChan <- update
@@ -535,6 +556,9 @@ func (t *TUI) handleDataUpdate(update *DataUpdate) {
 	case ResourceConfigMaps:
 		t.configMaps = update.ConfigMaps
 		klog.Infof("Loaded %d configmaps", len(t.configMaps))
+	case ResourceNamespaces:
+		t.namespaces = update.Namespaces
+		klog.Infof("Loaded %d namespaces", len(t.namespaces))
 	}
 
 	// Decrement counter
@@ -543,8 +567,8 @@ func (t *TUI) handleDataUpdate(update *DataUpdate) {
 		t.loading = false
 		// Adjust selection if needed
 		t.adjustSelection()
-		klog.Infof("All resources loaded - Pods: %d, Deployments: %d, Services: %d, ConfigMaps: %d in namespace: %s",
-			len(t.pods), len(t.deployments), len(t.services), len(t.configMaps), t.namespace)
+		klog.Infof("All resources loaded - Pods: %d, Deployments: %d, Services: %d, ConfigMaps: %d, Namespaces: %d in namespace: %s",
+			len(t.pods), len(t.deployments), len(t.services), len(t.configMaps), len(t.namespaces), t.namespace)
 	}
 }
 
@@ -1073,6 +1097,10 @@ func (t *TUI) getFilteredResources() []interface{} {
 		for _, cm := range t.configMaps {
 			resources = append(resources, cm)
 		}
+	case ResourceNamespaces:
+		for _, ns := range t.namespaces {
+			resources = append(resources, ns)
+		}
 	}
 
 	// Apply filters
@@ -1184,6 +1212,8 @@ func (t *TUI) getResourceName(resource interface{}) string {
 		return r.Name
 	case v1.ConfigMap:
 		return r.Name
+	case v1.Namespace:
+		return r.Name
 	default:
 		return ""
 	}
@@ -1250,6 +1280,15 @@ func (t *TUI) getResourceColumnValue(resource interface{}, colIndex int) string 
 		case 2:
 			return t.formatDuration(time.Since(r.CreationTimestamp.Time))
 		}
+	case v1.Namespace:
+		switch colIndex {
+		case 0:
+			return r.Name
+		case 1:
+			return string(r.Status.Phase)
+		case 2:
+			return t.formatDuration(time.Since(r.CreationTimestamp.Time))
+		}
 	}
 	return ""
 }
@@ -1265,6 +1304,8 @@ func (t *TUI) getTableHeaders() []string {
 		return []string{"Name", "Type", "Cluster-IP", "External-IP", "Ports"}
 	case ResourceConfigMaps:
 		return []string{"Name", "Data", "Age"}
+	case ResourceNamespaces:
+		return []string{"Name", "Status", "Age"}
 	default:
 		return []string{"Name", "Status", "Age"}
 	}
