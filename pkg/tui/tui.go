@@ -129,6 +129,50 @@ func DraculaTheme() Theme {
 	}
 }
 
+// NordTheme returns a nord-inspired color theme
+func NordTheme() Theme {
+	return Theme{
+		background: 0x2e3440, // nord0
+		foreground: 0xd8dee9, // nord4
+		header:     0x5e81ac, // nord9
+		accent:     0x88c0d0, // nord8
+		selected:   0xebcb8b, // nord13
+	}
+}
+
+// GruvboxTheme returns a gruvbox-inspired color theme
+func GruvboxTheme() Theme {
+	return Theme{
+		background: 0x282828, // bg0
+		foreground: 0xebdbb2, // fg
+		header:     0x458588, // blue
+		accent:     0x689d6a, // green
+		selected:   0xd79921, // yellow
+	}
+}
+
+// MonokaiTheme returns a monokai-inspired color theme
+func MonokaiTheme() Theme {
+	return Theme{
+		background: 0x272822, // background
+		foreground: 0xf8f8f2, // foreground
+		header:     0x66d9ef, // blue
+		accent:     0xa6e22e, // green
+		selected:   0xfd971f, // orange
+	}
+}
+
+// CyberpunkTheme returns a cyberpunk-inspired color theme
+func CyberpunkTheme() Theme {
+	return Theme{
+		background: 0x0d0d0d, // dark background
+		foreground: 0x00ff41, // matrix green
+		header:     0xff0080, // magenta
+		accent:     0x00ffff, // cyan
+		selected:   0xffff00, // yellow
+	}
+}
+
 // DisplayName returns the display name for a resource type
 func (rt ResourceType) DisplayName() string {
 	switch rt {
@@ -145,6 +189,30 @@ func (rt ResourceType) DisplayName() string {
 	default:
 		return "Unknown"
 	}
+}
+
+// nextTheme cycles to the next available theme
+func (t *TUI) nextTheme() {
+	themes := []Theme{
+		DefaultTheme(),
+		DarkTheme(),
+		LightTheme(),
+		SolarizedTheme(),
+		DraculaTheme(),
+		NordTheme(),
+		GruvboxTheme(),
+		MonokaiTheme(),
+		CyberpunkTheme(),
+	}
+
+	t.currentThemeIndex = (t.currentThemeIndex + 1) % len(themes)
+	t.theme = themes[t.currentThemeIndex]
+
+	// Force immediate redraw with clear
+	t.screen.Clear()
+	t.draw()
+	t.screen.Sync()
+	t.screen.Show()
 }
 
 // TUI represents the terminal user interface
@@ -388,6 +456,8 @@ func (t *TUI) Run() error {
 					t.toggleSplitView()
 				case 'S':
 					t.switchSplitLayout()
+				case 't', 'T':
+					t.nextTheme()
 				}
 			}
 		case *tcell.EventResize:
@@ -821,18 +891,18 @@ func (t *TUI) drawPanel(x, y, width, height int, isLeftPanel bool, viewMode View
 
 // drawListView draws the resource list view
 func (t *TUI) drawListView(width, height int) {
-	// Draw header
+	// Draw header (now 5 lines tall)
 	t.drawHeader(width)
 
 	// Draw search bar if filter is active
 	if t.filter != "" || t.filterMode {
-		t.drawSearchBar(width, 2)
+		t.drawSearchBar(width, 5)
 	}
 
 	// Draw main content area
-	contentStartY := 4
+	contentStartY := 6
 	if t.filter != "" || t.filterMode {
-		contentStartY = 6
+		contentStartY = 8
 	}
 	contentHeight := height - contentStartY - 2 // Leave space for status and footer
 
@@ -847,28 +917,47 @@ func (t *TUI) drawListView(width, height int) {
 
 // drawHeader draws the header with resource tabs
 func (t *TUI) drawHeader(width int) {
-	// Title
+	// Draw top border
+	topBorder := "┌" + strings.Repeat("─", width-2) + "┐"
+	t.drawText(0, 0, width, topBorder, tcell.StyleDefault.Foreground(t.theme.accent))
+
+	// Title with better styling
 	title := " 🚀 KGO - Kubernetes Dashboard "
 	padding := (width - len(title)) / 2
 	if padding < 0 {
 		padding = 0
 	}
+	titleBar := "│" + strings.Repeat(" ", padding) + title + strings.Repeat(" ", width-padding-len(title)-1) + "│"
 	headerStyle := tcell.StyleDefault.Background(t.theme.header).Foreground(tcell.ColorWhite).Bold(true)
-	t.drawText(0, 0, width, strings.Repeat(" ", padding)+title+strings.Repeat(" ", width-padding-len(title)), headerStyle)
+	t.drawText(0, 1, width, titleBar, headerStyle)
 
-	// Resource tabs
-	tabs := []string{" 1.Pods ", " 2.Deployments ", " 3.Services ", " 4.ConfigMaps "}
-	tabsY := 2
+	// Separator line
+	sepLine := "├" + strings.Repeat("─", width-2) + "┤"
+	t.drawText(0, 2, width, sepLine, tcell.StyleDefault.Foreground(t.theme.accent))
+
+	// Resource tabs with better styling
+	tabs := []string{" 1.Pods ", " 2.Deployments ", " 3.Services ", " 4.ConfigMaps ", " 5.Namespaces "}
+	tabsY := 3
 
 	x := 0
 	for i, tab := range tabs {
-		style := tcell.StyleDefault.Background(t.theme.background).Foreground(t.theme.foreground)
+		var style tcell.Style
 		if ResourceType(i) == t.currentView {
-			style = style.Background(t.theme.accent).Foreground(tcell.ColorWhite).Bold(true)
+			// Active tab styling
+			style = tcell.StyleDefault.Background(t.theme.selected).Foreground(tcell.ColorBlack).Bold(true)
+			// Add brackets around active tab
+			tab = "▶" + tab[1:] + "◀"
+		} else {
+			// Inactive tab styling
+			style = tcell.StyleDefault.Background(t.theme.background).Foreground(t.theme.foreground)
 		}
 		t.drawText(x, tabsY, len(tab), tab, style)
 		x += len(tab)
 	}
+
+	// Bottom border for header section
+	bottomBorder := "├" + strings.Repeat("─", width-2) + "┤"
+	t.drawText(0, 4, width, bottomBorder, tcell.StyleDefault.Foreground(t.theme.accent))
 }
 
 // drawResourceTable draws the resource table for current view
@@ -884,10 +973,10 @@ func (t *TUI) drawResourceTable(width, height, startY int) {
 	headers := t.getTableHeaders()
 	colWidths := t.getColumnWidths(width, len(headers))
 
-	// Draw table header
+	// Draw table header with enhanced styling
 	headerY := startY
 	headerText := "┌" + strings.Repeat("─", width-2) + "┐"
-	t.drawText(0, headerY, width, headerText, tcell.StyleDefault.Foreground(tcell.ColorGray))
+	t.drawText(0, headerY, width, headerText, tcell.StyleDefault.Foreground(t.theme.accent))
 
 	headerLine := "│ "
 	for i, header := range headers {
@@ -897,16 +986,16 @@ func (t *TUI) drawResourceTable(width, height, startY int) {
 		}
 	}
 	headerLine += " │"
-	t.drawText(0, headerY+1, width, headerLine, tcell.StyleDefault.Background(tcell.ColorGray).Foreground(tcell.ColorBlack).Bold(true))
+	t.drawText(0, headerY+1, width, headerLine, tcell.StyleDefault.Background(t.theme.header).Foreground(tcell.ColorWhite).Bold(true))
 
-	// Draw separator
+	// Draw separator with enhanced styling
 	sepLine := "├" + strings.Repeat("─", width-2) + "┤"
-	t.drawText(0, headerY+2, width, sepLine, tcell.StyleDefault.Foreground(tcell.ColorGray))
+	t.drawText(0, headerY+2, width, sepLine, tcell.StyleDefault.Foreground(t.theme.accent))
 
-	// Draw resources
+	// Draw resources with alternating row colors
 	resourceStartY := headerY + 3
 	for i, resource := range filtered {
-		if i >= height-4 { // Leave space for borders
+		if i >= height-5 { // Leave space for borders and footer
 			break
 		}
 
@@ -916,17 +1005,26 @@ func (t *TUI) drawResourceTable(width, height, startY int) {
 		// Highlight selected resource
 		if i == t.selected {
 			style = style.Background(t.theme.selected).Foreground(tcell.ColorBlack).Bold(true)
+		} else {
+			// Alternating row colors for better readability
+			if i%2 == 0 {
+				style = style.Background(t.theme.background)
+			} else {
+				// Slightly different background for alternate rows
+				style = style.Background(tcell.ColorBlack)
+			}
+			style = style.Foreground(t.theme.foreground)
 		}
 
 		line := t.formatResourceLine(resource, colWidths)
 		t.drawText(0, y, width, line, style)
 	}
 
-	// Draw table bottom border
-	if len(filtered) < height-4 {
+	// Draw bottom border
+	if len(filtered) > 0 && len(filtered) < height-5 {
 		bottomY := resourceStartY + len(filtered)
-		bottomLine := "└" + strings.Repeat("─", width-2) + "┘"
-		t.drawText(0, bottomY, width, bottomLine, tcell.StyleDefault.Foreground(tcell.ColorGray))
+		bottomBorder := "└" + strings.Repeat("─", width-2) + "┘"
+		t.drawText(0, bottomY, width, bottomBorder, tcell.StyleDefault.Foreground(t.theme.accent))
 	}
 }
 
@@ -1362,10 +1460,24 @@ func (t *TUI) formatResourceLine(resource interface{}, colWidths []int) string {
 func (t *TUI) drawStatusBar(width, y int) {
 	filtered := t.getFilteredResources()
 	total := t.getCurrentViewCount()
-	status := fmt.Sprintf(" 📁 %s | 🎯 %s | %d/%d items", t.namespace, t.currentView.DisplayName(), len(filtered), total)
 
+	// Build status components
+	namespaceInfo := fmt.Sprintf("📁 %s", t.namespace)
+	resourceInfo := fmt.Sprintf("🎯 %s: %d/%d", t.currentView.DisplayName(), len(filtered), total)
+	viewModeInfo := fmt.Sprintf("👁️ %s", t.getViewModeName())
+
+	// Add filter info if active
+	var filterInfo string
 	if t.filter != "" || t.filterMode {
-		status += fmt.Sprintf(" | 🔍 '%s'", t.filter)
+		filterInfo = fmt.Sprintf(" | 🔍 '%s'", t.filter)
+	}
+
+	// Combine status parts
+	status := fmt.Sprintf("%s | %s | %s%s", namespaceInfo, resourceInfo, viewModeInfo, filterInfo)
+
+	// Truncate if too long
+	if len(status) > width-2 {
+		status = status[:width-5] + "..."
 	}
 
 	// Pad to full width
@@ -1373,8 +1485,27 @@ func (t *TUI) drawStatusBar(width, y int) {
 		status += strings.Repeat(" ", width-len(status))
 	}
 
-	style := tcell.StyleDefault.Background(t.theme.accent).Foreground(tcell.ColorWhite)
+	// Enhanced styling with gradient-like effect
+	style := tcell.StyleDefault.Background(t.theme.accent).Foreground(tcell.ColorBlack).Bold(true)
 	t.drawText(0, y, width, status, style)
+}
+
+// getViewModeName returns a display name for the current view mode
+func (t *TUI) getViewModeName() string {
+	switch t.viewMode {
+	case ViewModeList:
+		return "List"
+	case ViewModeDetails:
+		return "Details"
+	case ViewModeYAML:
+		return "YAML"
+	case ViewModeLogs:
+		return "Logs"
+	case ViewModeRelationships:
+		return "Relationships"
+	default:
+		return "Unknown"
+	}
 }
 
 // getCurrentViewCount returns the total count for the current view
@@ -1812,6 +1943,7 @@ func (t *TUI) drawHelpScreen(width, height int) {
 		"",
 		" General:",
 		"   ?, h        Show this help",
+		"   t, T        Cycle through color themes",
 		"   q, Esc      Quit application",
 		"",
 		" Status Colors:",

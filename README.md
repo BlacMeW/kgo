@@ -6,7 +6,7 @@
 
 - 🚀 **Asynchronous Data Loading**: Non-blocking UI with concurrent resource fetching
 - 🎨 **Advanced TUI**: Feature-rich terminal interface with theming, filtering, and multi-view support
-- 📊 **Full Resource Support**: Pods, Deployments, Services, ConfigMaps, and extensible architecture
+- 📊 **Full Resource Support**: Pods, Deployments, Services, ConfigMaps, and Namespaces
 - 🔄 **Real-time Updates**: WebSocket streaming and background data refresh
 - 🏗️ **Modular Design**: Clean architecture with separate concerns for API, TUI, and web interfaces
 - ⚡ **Performance Optimized**: Concurrent operations and efficient Kubernetes API usage
@@ -101,10 +101,10 @@ The web UI includes:
 #### Advanced TUI Features
 
 - **Asynchronous Data Loading**: Non-blocking UI with concurrent resource fetching
-- **Multi-Resource Support**: Pods, Deployments, Services, and ConfigMaps
+- **Multi-Resource Support**: Pods, Deployments, Services, ConfigMaps, and Namespaces
 - **Advanced Filtering**: Regex support, case-sensitive/insensitive, inverse filtering
 - **Multiple View Modes**: List, Details, YAML, Logs, and Relationships views
-- **Theming**: Multiple color themes with customizable appearance
+- **Theming**: Multiple color themes with customizable appearance (Default, Dark, Light, Solarized, Dracula, Nord, Gruvbox, Monokai, Cyberpunk)
 - **Split-Pane Layout**: Horizontal/vertical split views for detailed inspection
 - **Real-time Updates**: Background data refresh without UI freezing
 - **Interactive Navigation**: Tab-based resource switching, keyboard shortcuts
@@ -114,7 +114,7 @@ The web UI includes:
 
 - **↑↓/←→** Navigate through resources
 - **Enter** Show resource details
-- **Tab** Switch between resource types (Pods/Deployments/Services/ConfigMaps)
+- **Tab** Switch between resource types (Pods/Deployments/Services/ConfigMaps/Namespaces)
 - **r/F5** Refresh data asynchronously
 - **d** Delete resource (with confirmation)
 - **n** Change namespace
@@ -125,8 +125,9 @@ The web UI includes:
 - **j** Show logs for pods
 - **s** Toggle split-pane view
 - **S** Switch split layout (horizontal/vertical)
-- **1-4** Quick switch to resource types
+- **1-5** Quick switch to resource types (1: Pods, 2: Deployments, 3: Services, 4: ConfigMaps, 5: Namespaces)
 - **c** Create new pod (basic)
+- **t/T** Cycle through color themes
 - **h/?** Show help
 - **q** Quit
 
@@ -180,6 +181,9 @@ curl -X POST -H "Content-Type: application/json" \
 - `POST /api/v1/configmaps/:namespace` - Create a configmap in namespace
 - `PUT /api/v1/configmaps/:namespace/:name` - Update a configmap
 - `DELETE /api/v1/configmaps/:namespace/:name` - Delete a configmap
+
+### Namespaces
+- `GET /api/v1/namespaces` - List all namespaces (gRPC only, TUI supported)
 
 ### Metrics
 - `GET /api/v1/metrics/cluster` - Get cluster-wide metrics
