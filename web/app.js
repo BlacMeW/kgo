@@ -4,30 +4,40 @@ class KubernetesDashboard {
     constructor() {
         this.apiBase = window.location.origin;
         this.currentNamespace = 'default';
+        this.currentResource = 'pods';
         this.websocket = null;
-        this.selectedPod = null;
-        this.allPods = [];
-        this.filteredPods = [];
+        this.selectedResource = null;
+        this.allResources = [];
+        this.filteredResources = [];
         this.searchTerm = '';
         this.autoRefreshInterval = null;
         this.logsFollowInterval = null;
+        this.theme = localStorage.getItem('theme') || 'light';
 
         this.init();
     }
 
     init() {
         this.bindEvents();
-        this.loadPods();
+        this.loadResources();
         this.connectWebSocket();
         this.setupKeyboardShortcuts();
         this.startAutoRefresh();
+        this.applyTheme();
     }
 
     bindEvents() {
+        // Resource tabs
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                this.switchResource(e.target.dataset.resource);
+            });
+        });
+
         // Namespace selector
         document.getElementById('namespace').addEventListener('change', (e) => {
             this.currentNamespace = e.target.value;
-            this.loadPods();
+            this.loadResources();
             this.reconnectWebSocket();
         });
 
@@ -43,9 +53,14 @@ class KubernetesDashboard {
         });
 
         // Buttons
-        document.getElementById('refresh-btn').addEventListener('click', () => this.loadPods());
+        document.getElementById('refresh-btn').addEventListener('click', () => this.loadResources());
         document.getElementById('create-btn').addEventListener('click', () => this.showCreateModal());
         document.getElementById('logs-btn').addEventListener('click', () => this.showLogsModal());
+        document.getElementById('metrics-btn').addEventListener('click', () => this.showMetricsPanel());
+        document.getElementById('theme-toggle').addEventListener('click', () => this.toggleTheme());
+
+        // Metrics panel
+        document.getElementById('close-metrics').addEventListener('click', () => this.hideMetricsPanel());
 
         // Modal events
         this.bindModalEvents();
@@ -61,13 +76,13 @@ class KubernetesDashboard {
             switch (e.key) {
                 case 'F5':
                     e.preventDefault();
-                    this.loadPods();
+                    this.loadResources();
                     break;
                 case 'r':
                 case 'R':
                     if (e.ctrlKey || e.metaKey) {
                         e.preventDefault();
-                        this.loadPods();
+                        this.loadResources();
                     }
                     break;
                 case 'n':
@@ -95,11 +110,50 @@ class KubernetesDashboard {
         });
     }
 
+    switchResource(resourceType) {
+        this.currentResource = resourceType;
+
+        // Update active tab
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.resource === resourceType);
+        });
+
+        // Update UI elements
+        this.updateUIForResource();
+        this.loadResources();
+        this.reconnectWebSocket();
+
+        // Update search placeholder
+        const searchInput = document.getElementById('search-input');
+        searchInput.placeholder = `🔍 Search ${resourceType}...`;
+
+        // Show/hide logs button (only for pods)
+        const logsBtn = document.getElementById('logs-btn');
+        logsBtn.style.display = resourceType === 'pods' ? 'inline-block' : 'none';
+    }
+
+    updateUIForResource() {
+        const headers = {
+            pods: ['Name', 'Status', 'Ready', 'Restarts', 'Age', 'Node', 'Actions'],
+            deployments: ['Name', 'Ready', 'Up-to-date', 'Available', 'Age', 'Actions'],
+            services: ['Name', 'Type', 'Cluster-IP', 'External-IP', 'Ports', 'Age', 'Actions'],
+            configmaps: ['Name', 'Data', 'Age', 'Actions']
+        };
+
+        const tableHeader = document.getElementById('table-header');
+        const headerRow = headers[this.currentResource].map(header => `<th>${header}</th>`).join('');
+        tableHeader.innerHTML = `<tr>${headerRow}</tr>`;
+
+        // Update create button text
+        const createBtn = document.getElementById('create-btn');
+        createBtn.textContent = `➕ Create ${this.currentResource.charAt(0).toUpperCase() + this.currentResource.slice(0, -1)}`;
+    }
+
     startAutoRefresh() {
         // Auto-refresh every 30 seconds
         this.autoRefreshInterval = setInterval(() => {
             if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) {
-                this.loadPods();
+                this.loadResources();
             }
         }, 30000);
     }
@@ -113,21 +167,22 @@ class KubernetesDashboard {
 
     applyFilters() {
         if (!this.searchTerm) {
-            this.filteredPods = [...this.allPods];
+            this.filteredResources = [...this.allResources];
             document.getElementById('clear-search').style.display = 'none';
             document.getElementById('filtered-count').style.display = 'none';
         } else {
-            this.filteredPods = this.allPods.filter(pod =>
-                pod.metadata.name.toLowerCase().includes(this.searchTerm) ||
-                (pod.spec.nodeName && pod.spec.nodeName.toLowerCase().includes(this.searchTerm)) ||
-                pod.status.phase.toLowerCase().includes(this.searchTerm)
+            this.filteredResources = this.allResources.filter(resource =>
+                resource.metadata.name.toLowerCase().includes(this.searchTerm) ||
+                (resource.spec && resource.spec.nodeName && resource.spec.nodeName.toLowerCase().includes(this.searchTerm)) ||
+                (resource.status && resource.status.phase && resource.status.phase.toLowerCase().includes(this.searchTerm)) ||
+                (resource.spec && resource.spec.type && resource.spec.type.toLowerCase().includes(this.searchTerm))
             );
             document.getElementById('clear-search').style.display = 'inline-block';
-            document.getElementById('filtered-count').textContent = `(${this.filteredPods.length} filtered)`;
+            document.getElementById('filtered-count').textContent = `(${this.filteredResources.length} filtered)`;
             document.getElementById('filtered-count').style.display = 'inline';
         }
 
-        this.renderPods(this.filteredPods);
+        this.renderResources(this.filteredResources);
     }
 
     bindModalEvents() {
@@ -190,31 +245,31 @@ class KubernetesDashboard {
         });
     }
 
-    async loadPods() {
+    async loadResources() {
         const refreshBtn = document.getElementById('refresh-btn');
         const spinner = refreshBtn.querySelector('.spinner');
 
         refreshBtn.disabled = true;
         spinner.style.display = 'inline-block';
 
-        this.setStatus('Loading pods...', 'loading');
+        this.setStatus(`Loading ${this.currentResource}...`, 'loading');
 
         try {
-            const response = await fetch(`${this.apiBase}/api/v1/pods?namespace=${this.currentNamespace}`);
+            const response = await fetch(`${this.apiBase}/api/v1/${this.currentResource}?namespace=${this.currentNamespace}`);
 
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
 
             const data = await response.json();
-            this.allPods = data.pods || [];
+            this.allResources = data[this.currentResource] || [];
             this.applyFilters();
-            this.setStatus('Pods loaded successfully', 'success');
+            this.setStatus(`${this.currentResource} loaded successfully`, 'success');
 
         } catch (error) {
-            console.error('Failed to load pods:', error);
-            this.setStatus(`Error loading pods: ${error.message}`, 'error');
-            this.allPods = [];
+            console.error(`Failed to load ${this.currentResource}:`, error);
+            this.setStatus(`Error loading ${this.currentResource}: ${error.message}`, 'error');
+            this.allResources = [];
             this.applyFilters();
         } finally {
             refreshBtn.disabled = false;
@@ -222,25 +277,47 @@ class KubernetesDashboard {
         }
     }
 
-    renderPods(pods) {
-        const tbody = document.getElementById('pods-body');
-        const podCount = document.getElementById('pod-count');
+    renderResources(resources) {
+        const tbody = document.getElementById('resources-body');
+        const resourceCount = document.getElementById('pod-count'); // Reusing pod-count element
         const logsBtn = document.getElementById('logs-btn');
 
-        podCount.textContent = `${this.allPods.length} pod${this.allPods.length !== 1 ? 's' : ''}`;
+        resourceCount.textContent = `${this.allResources.length} ${this.currentResource}`;
 
-        // Show/hide logs button based on pod selection
-        logsBtn.style.display = pods.length > 0 ? 'inline-block' : 'none';
+        // Show/hide logs button based on resource type and selection
+        logsBtn.style.display = (this.currentResource === 'pods' && resources.length > 0) ? 'inline-block' : 'none';
 
-        if (pods.length === 0) {
-            const colspan = this.searchTerm ? 7 : 7;
-            const message = this.searchTerm ? 'No pods match your search' : 'No pods found';
+        if (resources.length === 0) {
+            const headers = {
+                pods: 7, deployments: 6, services: 7, configmaps: 4
+            };
+            const colspan = headers[this.currentResource] || 5;
+            const message = this.searchTerm ? `No ${this.currentResource} match your search` : `No ${this.currentResource} found`;
             tbody.innerHTML = `<tr><td colspan="${colspan}" class="loading">${message}</td></tr>`;
             return;
         }
 
-        tbody.innerHTML = pods.map(pod => `
-            <tr data-pod-name="${pod.metadata.name}">
+        tbody.innerHTML = resources.map(resource => this.renderResourceRow(resource)).join('');
+    }
+
+    renderResourceRow(resource) {
+        switch (this.currentResource) {
+            case 'pods':
+                return this.renderPodRow(resource);
+            case 'deployments':
+                return this.renderDeploymentRow(resource);
+            case 'services':
+                return this.renderServiceRow(resource);
+            case 'configmaps':
+                return this.renderConfigMapRow(resource);
+            default:
+                return `<tr><td colspan="5">Unknown resource type</td></tr>`;
+        }
+    }
+
+    renderPodRow(pod) {
+        return `
+            <tr data-resource-name="${pod.metadata.name}">
                 <td>
                     <div class="pod-name">${pod.metadata.name}</div>
                 </td>
@@ -250,13 +327,75 @@ class KubernetesDashboard {
                 <td>${this.formatAge(pod.metadata.creationTimestamp)}</td>
                 <td>${pod.spec.nodeName || '<none>'}</td>
                 <td>
-                    <button class="btn action-btn view" onclick="dashboard.showPodDetails('${pod.metadata.name}')" title="View details">👁️</button>
-                    <button class="btn action-btn edit" onclick="dashboard.editPod('${pod.metadata.name}')" title="Edit pod">✏️</button>
+                    <button class="btn action-btn view" onclick="dashboard.showResourceDetails('${pod.metadata.name}')" title="View details">👁️</button>
+                    <button class="btn action-btn edit" onclick="dashboard.editResource('${pod.metadata.name}')" title="Edit pod">✏️</button>
                     <button class="btn action-btn logs" onclick="dashboard.showLogsModal('${pod.metadata.name}')" title="View logs">📋</button>
-                    <button class="btn action-btn delete" onclick="dashboard.deletePod('${pod.metadata.name}')" title="Delete pod">🗑️</button>
+                    <button class="btn action-btn exec" onclick="dashboard.execPod('${pod.metadata.name}')" title="Execute command">💻</button>
+                    <button class="btn action-btn delete" onclick="dashboard.deleteResource('${pod.metadata.name}')" title="Delete pod">🗑️</button>
                 </td>
             </tr>
-        `).join('');
+        `;
+    }
+
+    renderDeploymentRow(deployment) {
+        const ready = deployment.status.readyReplicas || 0;
+        const replicas = deployment.spec.replicas || 0;
+        const updated = deployment.status.updatedReplicas || 0;
+        const available = deployment.status.availableReplicas || 0;
+
+        return `
+            <tr data-resource-name="${deployment.metadata.name}">
+                <td><div class="pod-name">${deployment.metadata.name}</div></td>
+                <td>${ready}/${replicas}</td>
+                <td>${updated}</td>
+                <td>${available}</td>
+                <td>${this.formatAge(deployment.metadata.creationTimestamp)}</td>
+                <td>
+                    <button class="btn action-btn view" onclick="dashboard.showResourceDetails('${deployment.metadata.name}')" title="View details">👁️</button>
+                    <button class="btn action-btn edit" onclick="dashboard.editResource('${deployment.metadata.name}')" title="Edit deployment">✏️</button>
+                    <button class="btn action-btn delete" onclick="dashboard.deleteResource('${deployment.metadata.name}')" title="Delete deployment">🗑️</button>
+                </td>
+            </tr>
+        `;
+    }
+
+    renderServiceRow(service) {
+        const ports = service.spec.ports ? service.spec.ports.map(p => `${p.port}/${p.protocol}`).join(', ') : '';
+        const externalIP = service.status.loadBalancer && service.status.loadBalancer.ingress ?
+            service.status.loadBalancer.ingress[0].ip || service.status.loadBalancer.ingress[0].hostname : '<none>';
+
+        return `
+            <tr data-resource-name="${service.metadata.name}">
+                <td><div class="pod-name">${service.metadata.name}</div></td>
+                <td>${service.spec.type}</td>
+                <td>${service.spec.clusterIP || '<none>'}</td>
+                <td>${externalIP}</td>
+                <td>${ports}</td>
+                <td>${this.formatAge(service.metadata.creationTimestamp)}</td>
+                <td>
+                    <button class="btn action-btn view" onclick="dashboard.showResourceDetails('${service.metadata.name}')" title="View details">�️</button>
+                    <button class="btn action-btn edit" onclick="dashboard.editResource('${service.metadata.name}')" title="Edit service">✏️</button>
+                    <button class="btn action-btn delete" onclick="dashboard.deleteResource('${service.metadata.name}')" title="Delete service">�🗑️</button>
+                </td>
+            </tr>
+        `;
+    }
+
+    renderConfigMapRow(configmap) {
+        const dataCount = configmap.data ? Object.keys(configmap.data).length : 0;
+
+        return `
+            <tr data-resource-name="${configmap.metadata.name}">
+                <td><div class="pod-name">${configmap.metadata.name}</div></td>
+                <td>${dataCount} keys</td>
+                <td>${this.formatAge(configmap.metadata.creationTimestamp)}</td>
+                <td>
+                    <button class="btn action-btn view" onclick="dashboard.showResourceDetails('${configmap.metadata.name}')" title="View details">👁️</button>
+                    <button class="btn action-btn edit" onclick="dashboard.editResource('${configmap.metadata.name}')" title="Edit configmap">✏️</button>
+                    <button class="btn action-btn delete" onclick="dashboard.deleteResource('${configmap.metadata.name}')" title="Delete configmap">🗑️</button>
+                </td>
+            </tr>
+        `;
     }
 
     getRestartCount(pod) {
@@ -429,8 +568,8 @@ class KubernetesDashboard {
             }
 
             this.hideModal('pod-modal');
-            this.loadPods();
-            this.setStatus('Pod created successfully', 'success');
+            this.loadResources();
+            this.setStatus('Resource created successfully', 'success');
 
         } catch (error) {
             console.error('Failed to create pod:', error);
@@ -457,9 +596,9 @@ class KubernetesDashboard {
             }
 
             this.hideModal('delete-modal');
-            this.loadPods();
-            this.setStatus('Pod deleted successfully', 'success');
-            this.selectedPod = null;
+            this.loadResources();
+            this.setStatus('Resource deleted successfully', 'success');
+            this.selectedResource = null;
 
         } catch (error) {
             console.error('Failed to delete pod:', error);
@@ -467,30 +606,30 @@ class KubernetesDashboard {
         }
     }
 
-    async showPodDetails(podName) {
-        document.getElementById('details-title').textContent = `Pod: ${podName}`;
+    async showResourceDetails(resourceName) {
+        document.getElementById('details-title').textContent = `${this.currentResource.charAt(0).toUpperCase() + this.currentResource.slice(1, -1)}: ${resourceName}`;
         document.getElementById('pod-details').textContent = 'Loading...';
         this.showModal('details-modal');
 
         try {
-            const response = await fetch(`${this.apiBase}/api/v1/pods?namespace=${this.currentNamespace}`);
+            const response = await fetch(`${this.apiBase}/api/v1/${this.currentResource}?namespace=${this.currentNamespace}`);
 
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
 
             const data = await response.json();
-            const pod = data.pods.find(p => p.metadata.name === podName);
+            const resource = data[this.currentResource].find(r => r.metadata.name === resourceName);
 
-            if (pod) {
-                document.getElementById('pod-details').textContent = JSON.stringify(pod, null, 2);
+            if (resource) {
+                document.getElementById('pod-details').textContent = JSON.stringify(resource, null, 2);
             } else {
-                document.getElementById('pod-details').textContent = 'Pod not found';
+                document.getElementById('pod-details').textContent = 'Resource not found';
             }
 
         } catch (error) {
-            console.error('Failed to load pod details:', error);
-            document.getElementById('pod-details').textContent = `Error: ${error.message}`;
+            console.error('Failed to load resource details:', error);
+            document.getElementById('pod-details').textContent = `Error loading details: ${error.message}`;
         }
     }
 
@@ -499,9 +638,15 @@ class KubernetesDashboard {
             this.websocket.close();
         }
 
+        // Only connect WebSocket for pods (other resources don't have watch endpoints yet)
+        if (this.currentResource !== 'pods') {
+            this.updateConnectionStatus('disconnected', 'Real-time updates not available');
+            return;
+        }
+
         this.updateConnectionStatus('connecting', 'Connecting...');
 
-        const wsUrl = `ws://${window.location.host}/api/v1/pods/watch?namespace=${this.currentNamespace}`;
+        const wsUrl = `ws://${window.location.host}/api/v1/${this.currentResource}/watch?namespace=${this.currentNamespace}`;
         this.websocket = new WebSocket(wsUrl);
 
         this.websocket.onopen = () => {
@@ -512,8 +657,8 @@ class KubernetesDashboard {
         this.websocket.onmessage = (event) => {
             try {
                 const change = JSON.parse(event.data);
-                console.log('Pod change:', change);
-                this.handlePodChange(change);
+                console.log('Resource change:', change);
+                this.handleResourceChange(change);
             } catch (error) {
                 console.error('Failed to parse WebSocket message:', error);
             }
@@ -547,11 +692,11 @@ class KubernetesDashboard {
         this.connectWebSocket();
     }
 
-    handlePodChange(change) {
+    handleResourceChange(change) {
         // Simple refresh for now - in a more sophisticated implementation,
         // you could update the table incrementally
-        console.log('Pod change detected, refreshing...');
-        this.loadPods();
+        console.log('Resource change detected, refreshing...');
+        this.loadResources();
     }
 
     showModal(modalId) {
@@ -576,6 +721,64 @@ class KubernetesDashboard {
         }
     }
 
+    toggleTheme() {
+        this.theme = this.theme === 'light' ? 'dark' : 'light';
+        localStorage.setItem('theme', this.theme);
+        this.applyTheme();
+    }
+
+    applyTheme() {
+        document.documentElement.setAttribute('data-theme', this.theme);
+        const themeBtn = document.getElementById('theme-toggle');
+        themeBtn.textContent = this.theme === 'light' ? '🌙' : '☀️';
+        themeBtn.title = `Switch to ${this.theme === 'light' ? 'dark' : 'light'} theme`;
+    }
+
+    showMetricsPanel() {
+        document.getElementById('metrics-panel').style.display = 'block';
+        this.loadMetrics();
+    }
+
+    hideMetricsPanel() {
+        document.getElementById('metrics-panel').style.display = 'none';
+    }
+
+    async loadMetrics() {
+        try {
+            // Load cluster metrics
+            const clusterResponse = await fetch(`${this.apiBase}/api/v1/metrics/cluster`);
+            if (clusterResponse.ok) {
+                const clusterData = await clusterResponse.json();
+                this.updateClusterMetrics(clusterData);
+            }
+
+            // Load namespace metrics
+            const nsResponse = await fetch(`${this.apiBase}/api/v1/metrics/namespace/${this.currentNamespace}`);
+            if (nsResponse.ok) {
+                const nsData = await nsResponse.json();
+                this.updateNamespaceMetrics(nsData);
+            }
+        } catch (error) {
+            console.error('Failed to load metrics:', error);
+        }
+    }
+
+    updateClusterMetrics(data) {
+        document.getElementById('nodes-count').textContent = data.cluster.nodes;
+        document.getElementById('total-pods').textContent = data.cluster.pods;
+        document.getElementById('namespaces-count').textContent = data.cluster.namespaces;
+        document.getElementById('running-pods').textContent = data.pod_status.running;
+        document.getElementById('pending-pods').textContent = data.pod_status.pending;
+        document.getElementById('failed-pods').textContent = data.pod_status.failed;
+    }
+
+    updateNamespaceMetrics(data) {
+        document.getElementById('current-namespace-metrics').textContent = data.namespace;
+        document.getElementById('ns-pods').textContent = data.pods.total;
+        document.getElementById('ns-deployments').textContent = data.deployments.total;
+        document.getElementById('ns-services').textContent = data.services.total;
+    }
+
     // Cleanup on page unload
     destroy() {
         if (this.websocket) {
@@ -585,6 +788,14 @@ class KubernetesDashboard {
             clearInterval(this.autoRefreshInterval);
         }
         this.stopLogsFollow();
+    }
+
+    execPod(podName) {
+        const command = prompt('Enter command to execute (default: /bin/sh):', '/bin/sh');
+        if (!command) return;
+
+        // For now, just show an alert - full exec implementation would require WebSocket
+        alert(`Exec functionality for pod '${podName}' with command '${command}' would be implemented here.\n\nThis requires WebSocket connection to stream terminal I/O.`);
     }
 }
 

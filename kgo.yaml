@@ -1,0 +1,26 @@
+# KGO Kubernetes Dashboard Configuration
+# This is a sample configuration file for the KGO dashboard
+
+server:
+  # Server configuration
+  port: "8080"
+  host: "0.0.0.0"
+  logLevel: "info"
+
+kubernetes:
+  # Kubernetes configuration
+  kubeconfig: "" # Leave empty to use default kubeconfig location
+  context: "" # Leave empty to use current context
+  namespace: "default"
+
+ui:
+  # UI configuration
+  theme: "dark" # "light" or "dark"
+  autoRefresh: 30 # Auto-refresh interval in seconds
+  maxLogs: 1000 # Maximum number of log lines to display
+
+features:
+  # Feature toggles
+  enableMetrics: true
+  enableExec: true
+  enableLogs: true

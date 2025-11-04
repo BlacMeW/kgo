@@ -11,6 +11,12 @@
         <header>
             <h1>🚀 Kubernetes Dashboard</h1>
             <div class="header-controls">
+                <div class="resource-tabs">
+                    <button class="tab-btn active" data-resource="pods">Pods</button>
+                    <button class="tab-btn" data-resource="deployments">Deployments</button>
+                    <button class="tab-btn" data-resource="services">Services</button>
+                    <button class="tab-btn" data-resource="configmaps">ConfigMaps</button>
+                </div>
                 <div class="namespace-selector">
                     <label for="namespace">Namespace:</label>
                     <select id="namespace">
@@ -20,19 +26,74 @@
                     </select>
                 </div>
                 <div class="search-container">
-                    <input type="text" id="search-input" placeholder="🔍 Search pods..." autocomplete="off">
+                    <input type="text" id="search-input" placeholder="🔍 Search..." autocomplete="off">
                     <button id="clear-search" class="btn btn-secondary" style="display: none;">✕</button>
                 </div>
                 <div class="actions">
-                    <button id="refresh-btn" class="btn btn-primary" title="Refresh pods (F5)">
+                    <button id="refresh-btn" class="btn btn-primary" title="Refresh (F5)">
                         <span class="spinner" style="display: none;"></span>
                         🔄 Refresh
                     </button>
-                    <button id="create-btn" class="btn btn-success" title="Create new pod (Ctrl+N)">➕ Create Pod</button>
-                    <button id="logs-btn" class="btn btn-info" title="View pod logs" style="display: none;">📋 Logs</button>
+                    <button id="create-btn" class="btn btn-success" title="Create (Ctrl+N)">➕ Create</button>
+                    <button id="logs-btn" class="btn btn-info" title="View logs" style="display: none;">📋 Logs</button>
+                    <button id="metrics-btn" class="btn btn-secondary" title="View metrics">📊 Metrics</button>
+                    <button id="theme-toggle" class="btn btn-secondary" title="Toggle theme">🌙</button>
                 </div>
             </div>
         </header>
+
+        <!-- Metrics Panel -->
+        <div id="metrics-panel" class="metrics-panel" style="display: none;">
+            <div class="metrics-header">
+                <h2>📊 Cluster Metrics</h2>
+                <button id="close-metrics" class="btn btn-secondary">✕</button>
+            </div>
+            <div class="metrics-content">
+                <div class="metrics-grid">
+                    <div class="metric-card">
+                        <h3>Nodes</h3>
+                        <div class="metric-value" id="nodes-count">-</div>
+                    </div>
+                    <div class="metric-card">
+                        <h3>Total Pods</h3>
+                        <div class="metric-value" id="total-pods">-</div>
+                    </div>
+                    <div class="metric-card">
+                        <h3>Namespaces</h3>
+                        <div class="metric-value" id="namespaces-count">-</div>
+                    </div>
+                    <div class="metric-card">
+                        <h3>Running Pods</h3>
+                        <div class="metric-value status-running" id="running-pods">-</div>
+                    </div>
+                    <div class="metric-card">
+                        <h3>Pending Pods</h3>
+                        <div class="metric-value status-pending" id="pending-pods">-</div>
+                    </div>
+                    <div class="metric-card">
+                        <h3>Failed Pods</h3>
+                        <div class="metric-value status-failed" id="failed-pods">-</div>
+                    </div>
+                </div>
+                <div class="namespace-metrics">
+                    <h3>Namespace: <span id="current-namespace-metrics">default</span></h3>
+                    <div class="metrics-grid">
+                        <div class="metric-card">
+                            <h3>Pods</h3>
+                            <div class="metric-value" id="ns-pods">-</div>
+                        </div>
+                        <div class="metric-card">
+                            <h3>Deployments</h3>
+                            <div class="metric-value" id="ns-deployments">-</div>
+                        </div>
+                        <div class="metric-card">
+                            <h3>Services</h3>
+                            <div class="metric-value" id="ns-services">-</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
 
         <main>
             <div class="status-bar">
@@ -50,23 +111,21 @@
             </div>
 
             <div class="table-container">
-                <table id="pods-table">
-                    <thead>
+                <table id="resources-table">
+                    <thead id="table-header">
                         <tr>
                             <th>Name</th>
                             <th>Status</th>
                             <th>Ready</th>
-                            <th>Restarts</th>
                             <th>Age</th>
-                            <th>Node</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
-                    <tbody id="pods-body">
+                    <tbody id="resources-body">
                         <tr>
-                            <td colspan="7" class="loading">
+                            <td colspan="5" class="loading">
                                 <div class="loading-spinner"></div>
-                                Loading pods...
+                                Loading resources...
                             </td>
                         </tr>
                     </tbody>

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -8,11 +9,139 @@ import (
 	"k8s-dashboard/pkg/k8s"
 
 	"github.com/gdamore/tcell/v2"
+	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 )
+
+// DataUpdate represents an update to resource data
+type DataUpdate struct {
+	ResourceType ResourceType
+	Pods         []v1.Pod
+	Deployments  []appsv1.Deployment
+	Services     []v1.Service
+	ConfigMaps   []v1.ConfigMap
+	Error        error
+}
+
+// ResourceType represents different types of Kubernetes resources
+type ResourceType int
+
+const (
+	ResourcePods ResourceType = iota
+	ResourceDeployments
+	ResourceServices
+	ResourceConfigMaps
+)
+
+// ViewMode represents different view modes
+type ViewMode int
+
+const (
+	ViewModeList ViewMode = iota
+	ViewModeDetails
+	ViewModeYAML
+	ViewModeLogs
+	ViewModeRelationships
+)
+
+// LayoutMode represents different layout modes
+type LayoutMode int
+
+const (
+	LayoutSingle LayoutMode = iota
+	LayoutSplitVertical
+	LayoutSplitHorizontal
+)
+
+// Theme represents a color theme
+type Theme struct {
+	background tcell.Color
+	foreground tcell.Color
+	header     tcell.Color
+	accent     tcell.Color
+	selected   tcell.Color
+}
+
+// Relationship represents a relationship between resources
+type Relationship struct {
+	From         string
+	To           string
+	RelationType string
+}
+
+// DefaultTheme returns the default color theme
+func DefaultTheme() Theme {
+	return Theme{
+		background: tcell.ColorBlack,
+		foreground: tcell.ColorWhite,
+		header:     tcell.ColorBlue,
+		accent:     tcell.ColorAqua,
+		selected:   tcell.ColorYellow,
+	}
+}
+
+// DarkTheme returns a dark color theme
+func DarkTheme() Theme {
+	return Theme{
+		background: tcell.ColorBlack,
+		foreground: tcell.ColorWhite,
+		header:     tcell.ColorDarkBlue,
+		accent:     tcell.ColorDarkCyan,
+		selected:   tcell.ColorYellow,
+	}
+}
+
+// LightTheme returns a light color theme
+func LightTheme() Theme {
+	return Theme{
+		background: tcell.ColorWhite,
+		foreground: tcell.ColorBlack,
+		header:     tcell.ColorBlue,
+		accent:     tcell.ColorDarkCyan,
+		selected:   tcell.ColorRed,
+	}
+}
+
+// SolarizedTheme returns a solarized color theme
+func SolarizedTheme() Theme {
+	return Theme{
+		background: tcell.ColorBlack,
+		foreground: tcell.ColorWhite,
+		header:     0x073642, // base02
+		accent:     0x2aa198, // cyan
+		selected:   0xb58900, // yellow
+	}
+}
+
+// DraculaTheme returns a dracula color theme
+func DraculaTheme() Theme {
+	return Theme{
+		background: 0x282a36, // background
+		foreground: 0xf8f8f2, // foreground
+		header:     0x6272a4, // comment
+		accent:     0x50fa7b, // green
+		selected:   0xff79c6, // pink
+	}
+}
+
+// DisplayName returns the display name for a resource type
+func (rt ResourceType) DisplayName() string {
+	switch rt {
+	case ResourcePods:
+		return "Pods"
+	case ResourceDeployments:
+		return "Deployments"
+	case ResourceServices:
+		return "Services"
+	case ResourceConfigMaps:
+		return "ConfigMaps"
+	default:
+		return "Unknown"
+	}
+}
 
 // TUI represents the terminal user interface
 type TUI struct {
@@ -24,6 +153,44 @@ type TUI struct {
 	filter    string
 	showHelp  bool
 	loading   bool
+
+	// Async loading
+	loadingCounter int
+
+	// Advanced filtering
+	filterMode    bool
+	columnFilters []string
+	useRegex      bool
+	caseSensitive bool
+	inverseFilter bool
+
+	// Theming
+	currentThemeIndex int
+	theme             Theme
+
+	// Split-pane functionality
+	splitRatio float64
+	layoutMode LayoutMode
+
+	// View modes
+	currentView ResourceType
+	viewMode    ViewMode
+
+	// Resource data
+	deployments []appsv1.Deployment
+	services    []v1.Service
+	configMaps  []v1.ConfigMap
+
+	// Scrolling
+	detailsScroll       int
+	logsScroll          int
+	relationshipsScroll int
+
+	// Relationships
+	relationships []Relationship
+
+	// Async data loading
+	dataChan chan *DataUpdate
 }
 
 // NewTUI creates a new TUI instance
@@ -43,10 +210,48 @@ func NewTUI(clientset kubernetes.Interface) (*TUI, error) {
 		screen:    screen,
 		clientset: clientset,
 		selected:  0,
-		namespace: "default",
+		namespace: "kube-system",
 		filter:    "",
 		showHelp:  false,
 		loading:   false,
+
+		// Async loading
+		loadingCounter: 0,
+
+		// Advanced filtering
+		filterMode:    false,
+		columnFilters: make([]string, 5), // 5 columns for pods
+		useRegex:      false,
+		caseSensitive: false,
+		inverseFilter: false,
+
+		// Theming
+		currentThemeIndex: 0,
+		theme:             DefaultTheme(),
+
+		// Split-pane
+		splitRatio: 0.5,
+		layoutMode: LayoutSingle,
+
+		// View modes
+		currentView: ResourcePods,
+		viewMode:    ViewModeList,
+
+		// Resource data
+		deployments: []appsv1.Deployment{},
+		services:    []v1.Service{},
+		configMaps:  []v1.ConfigMap{},
+
+		// Scrolling
+		detailsScroll:       0,
+		logsScroll:          0,
+		relationshipsScroll: 0,
+
+		// Relationships
+		relationships: []Relationship{},
+
+		// Async data loading
+		dataChan: make(chan *DataUpdate, 10),
 	}, nil
 }
 
@@ -54,9 +259,12 @@ func NewTUI(clientset kubernetes.Interface) (*TUI, error) {
 func (t *TUI) Run() error {
 	defer t.screen.Fini()
 
-	// Initial pod load
-	if err := t.loadPods(); err != nil {
-		return fmt.Errorf("failed to load pods: %v", err)
+	// Start data update handler
+	go t.handleDataUpdates()
+
+	// Initial data load
+	if err := t.refreshData(); err != nil {
+		return fmt.Errorf("failed to load data: %v", err)
 	}
 
 	// Main event loop
@@ -73,35 +281,105 @@ func (t *TUI) Run() error {
 				continue
 			}
 
+			// Handle view mode navigation
+			if t.viewMode != ViewModeList {
+				switch ev.Key() {
+				case tcell.KeyEscape:
+					t.viewMode = ViewModeList
+					continue
+				case tcell.KeyDown:
+					switch t.viewMode {
+					case ViewModeDetails, ViewModeYAML:
+						t.detailsScroll++
+					case ViewModeLogs:
+						t.logsScroll++
+					case ViewModeRelationships:
+						t.relationshipsScroll++
+					}
+					continue
+				case tcell.KeyUp:
+					switch t.viewMode {
+					case ViewModeDetails, ViewModeYAML:
+						if t.detailsScroll > 0 {
+							t.detailsScroll--
+						}
+					case ViewModeLogs:
+						if t.logsScroll > 0 {
+							t.logsScroll--
+						}
+					case ViewModeRelationships:
+						if t.relationshipsScroll > 0 {
+							t.relationshipsScroll--
+						}
+					}
+					continue
+				}
+			}
+
 			switch ev.Key() {
 			case tcell.KeyEscape, tcell.KeyCtrlC:
-				return nil
-			case tcell.KeyDown:
+				if t.viewMode != ViewModeList {
+					t.viewMode = ViewModeList
+				} else {
+					return nil
+				}
+			case tcell.KeyDown, tcell.KeyRight:
 				t.moveSelection(1)
-			case tcell.KeyUp:
+			case tcell.KeyUp, tcell.KeyLeft:
 				t.moveSelection(-1)
 			case tcell.KeyEnter:
-				t.showPodDetails()
+				if t.viewMode == ViewModeList {
+					t.viewMode = ViewModeDetails
+				}
+			case tcell.KeyTab:
+				t.currentView = ResourceType((int(t.currentView) + 1) % 4)
+				t.selected = 0
 			case tcell.KeyF5:
-				t.loadPods()
+				t.refreshData()
 			case tcell.KeyRune:
 				switch ev.Rune() {
 				case 'q':
 					return nil
 				case 'r':
-					t.loadPods()
+					t.refreshData()
 				case 'd':
-					t.deleteSelectedPod()
+					t.deleteSelectedResource()
 				case 'n':
 					t.changeNamespace()
 				case 'c':
 					t.createPodDialog()
-				case 'h':
+				case 'h', '?':
 					t.showHelp = true
 				case '/':
 					t.searchDialog()
 				case 'f':
 					t.clearFilter()
+				case '1':
+					t.currentView = ResourcePods
+					t.selected = 0
+				case '2':
+					t.currentView = ResourceDeployments
+					t.selected = 0
+				case '3':
+					t.currentView = ResourceServices
+					t.selected = 0
+				case '4':
+					t.currentView = ResourceConfigMaps
+					t.selected = 0
+				case 'v':
+					t.nextViewMode()
+				case 'y':
+					if t.viewMode == ViewModeDetails {
+						t.viewMode = ViewModeYAML
+					}
+				case 'j':
+					if t.viewMode == ViewModeDetails && t.currentView == ResourcePods {
+						t.viewMode = ViewModeLogs
+					}
+				case 's':
+					t.toggleSplitView()
+				case 'S':
+					t.switchSplitLayout()
 				}
 			}
 		case *tcell.EventResize:
@@ -112,13 +390,7 @@ func (t *TUI) Run() error {
 
 // loadPods fetches pods from the current namespace
 func (t *TUI) loadPods() error {
-	t.loading = true
-	t.draw()
-	t.screen.Show()
-
 	pods, err := k8s.ListPods(t.clientset, t.namespace)
-	t.loading = false
-
 	if err != nil {
 		klog.Errorf("Failed to list pods: %v", err)
 		return err
@@ -135,9 +407,173 @@ func (t *TUI) loadPods() error {
 	return nil
 }
 
+// refreshData loads all resource types asynchronously
+func (t *TUI) refreshData() error {
+	t.loading = true
+	t.loadingCounter = 4 // 4 resource types
+	t.draw()
+	t.screen.Show()
+
+	// Clear existing data
+	t.pods = nil
+	t.deployments = nil
+	t.services = nil
+	t.configMaps = nil
+
+	// Start async loading
+	go t.loadPodsAsync()
+	go t.loadDeploymentsAsync()
+	go t.loadServicesAsync()
+	go t.loadConfigMapsAsync()
+
+	return nil
+}
+
+// loadPodsAsync loads pods asynchronously
+func (t *TUI) loadPodsAsync() {
+	pods, err := k8s.ListPods(t.clientset, t.namespace)
+	update := &DataUpdate{
+		ResourceType: ResourcePods,
+		Pods:         pods,
+		Error:        err,
+	}
+	t.dataChan <- update
+}
+
+// loadDeploymentsAsync loads deployments asynchronously
+func (t *TUI) loadDeploymentsAsync() {
+	deployments, err := k8s.ListDeployments(t.clientset, t.namespace)
+	update := &DataUpdate{
+		ResourceType: ResourceDeployments,
+		Deployments:  deployments,
+		Error:        err,
+	}
+	t.dataChan <- update
+}
+
+// loadServicesAsync loads services asynchronously
+func (t *TUI) loadServicesAsync() {
+	services, err := k8s.ListServices(t.clientset, t.namespace)
+	update := &DataUpdate{
+		ResourceType: ResourceServices,
+		Services:     services,
+		Error:        err,
+	}
+	t.dataChan <- update
+}
+
+// loadConfigMapsAsync loads configmaps asynchronously
+func (t *TUI) loadConfigMapsAsync() {
+	configMaps, err := k8s.ListConfigMaps(t.clientset, t.namespace)
+	update := &DataUpdate{
+		ResourceType: ResourceConfigMaps,
+		ConfigMaps:   configMaps,
+		Error:        err,
+	}
+	t.dataChan <- update
+}
+
+// loadDeployments fetches deployments from the current namespace
+func (t *TUI) loadDeployments() error {
+	deployments, err := k8s.ListDeployments(t.clientset, t.namespace)
+	if err != nil {
+		klog.Errorf("Failed to list deployments: %v", err)
+		return err
+	}
+	t.deployments = deployments
+	return nil
+}
+
+// loadServices fetches services from the current namespace
+func (t *TUI) loadServices() error {
+	services, err := k8s.ListServices(t.clientset, t.namespace)
+	if err != nil {
+		klog.Errorf("Failed to list services: %v", err)
+		return err
+	}
+	t.services = services
+	return nil
+}
+
+// loadConfigMaps fetches configmaps from the current namespace
+func (t *TUI) loadConfigMaps() error {
+	configMaps, err := k8s.ListConfigMaps(t.clientset, t.namespace)
+	if err != nil {
+		klog.Errorf("Failed to list configmaps: %v", err)
+		return err
+	}
+	t.configMaps = configMaps
+	return nil
+}
+
+// handleDataUpdates runs in a goroutine to process async data updates
+func (t *TUI) handleDataUpdates() {
+	for update := range t.dataChan {
+		t.handleDataUpdate(update)
+		// Trigger a redraw by sending a custom event or just continuing
+		// For now, we'll rely on the main loop redrawing on events
+	}
+}
+
+// handleDataUpdate processes a data update from async loading
+func (t *TUI) handleDataUpdate(update *DataUpdate) {
+	if update.Error != nil {
+		klog.Errorf("Failed to load %v: %v", update.ResourceType, update.Error)
+		// Could show error in UI
+	}
+
+	switch update.ResourceType {
+	case ResourcePods:
+		t.pods = update.Pods
+		klog.Infof("Loaded %d pods", len(t.pods))
+	case ResourceDeployments:
+		t.deployments = update.Deployments
+		klog.Infof("Loaded %d deployments", len(t.deployments))
+	case ResourceServices:
+		t.services = update.Services
+		klog.Infof("Loaded %d services", len(t.services))
+	case ResourceConfigMaps:
+		t.configMaps = update.ConfigMaps
+		klog.Infof("Loaded %d configmaps", len(t.configMaps))
+	}
+
+	// Decrement counter
+	t.loadingCounter--
+	if t.loadingCounter <= 0 {
+		t.loading = false
+		// Adjust selection if needed
+		t.adjustSelection()
+		klog.Infof("All resources loaded - Pods: %d, Deployments: %d, Services: %d, ConfigMaps: %d in namespace: %s",
+			len(t.pods), len(t.deployments), len(t.services), len(t.configMaps), t.namespace)
+	}
+}
+
+// adjustSelection ensures selected index is valid after data updates
+func (t *TUI) adjustSelection() {
+	var maxItems int
+	switch t.currentView {
+	case ResourcePods:
+		maxItems = len(t.pods)
+	case ResourceDeployments:
+		maxItems = len(t.deployments)
+	case ResourceServices:
+		maxItems = len(t.services)
+	case ResourceConfigMaps:
+		maxItems = len(t.configMaps)
+	}
+
+	if t.selected >= maxItems {
+		t.selected = maxItems - 1
+	}
+	if t.selected < 0 {
+		t.selected = 0
+	}
+}
+
 // moveSelection moves the selection up or down
 func (t *TUI) moveSelection(delta int) {
-	if len(t.pods) == 0 {
+	filtered := t.getFilteredResources()
+	if len(filtered) == 0 {
 		return
 	}
 
@@ -145,8 +581,8 @@ func (t *TUI) moveSelection(delta int) {
 	if t.selected < 0 {
 		t.selected = 0
 	}
-	if t.selected >= len(t.pods) {
-		t.selected = len(t.pods) - 1
+	if t.selected >= len(filtered) {
+		t.selected = len(filtered) - 1
 	}
 }
 
@@ -166,27 +602,308 @@ func (t *TUI) draw() {
 		return
 	}
 
-	// Draw title bar
-	t.drawTitleBar(width)
+	// Handle different layout modes
+	switch t.layoutMode {
+	case LayoutSingle:
+		t.drawSingleView(width, height)
+	case LayoutSplitVertical:
+		t.drawSplitVertical(width, height)
+	case LayoutSplitHorizontal:
+		t.drawSplitHorizontal(width, height)
+	}
+}
+
+// drawSingleView draws the single-pane view
+func (t *TUI) drawSingleView(width, height int) {
+	// Handle different view modes
+	switch t.viewMode {
+	case ViewModeList:
+		t.drawListView(width, height)
+	case ViewModeDetails:
+		t.drawDetailsView(width, height)
+	case ViewModeYAML:
+		t.drawYAMLView(width, height)
+	case ViewModeLogs:
+		t.drawLogsView(width, height)
+	case ViewModeRelationships:
+		t.drawRelationshipsView(width, height)
+	}
+}
+
+// nextViewMode cycles through view modes
+func (t *TUI) nextViewMode() {
+	switch t.viewMode {
+	case ViewModeList:
+		t.viewMode = ViewModeDetails
+	case ViewModeDetails:
+		t.viewMode = ViewModeYAML
+	case ViewModeYAML:
+		if t.currentView == ResourcePods {
+			t.viewMode = ViewModeLogs
+		} else {
+			t.viewMode = ViewModeList
+		}
+	case ViewModeLogs:
+		t.viewMode = ViewModeRelationships
+	case ViewModeRelationships:
+		t.viewMode = ViewModeList
+	}
+}
+
+// toggleSplitView toggles between single and split view modes
+func (t *TUI) toggleSplitView() {
+	if t.layoutMode == LayoutSingle {
+		t.layoutMode = LayoutSplitVertical
+	} else {
+		t.layoutMode = LayoutSingle
+	}
+}
+
+// switchSplitLayout switches between vertical and horizontal split
+func (t *TUI) switchSplitLayout() {
+	if t.layoutMode == LayoutSplitVertical {
+		t.layoutMode = LayoutSplitHorizontal
+	} else if t.layoutMode == LayoutSplitHorizontal {
+		t.layoutMode = LayoutSplitVertical
+	}
+}
+
+// deleteSelectedResource deletes the currently selected resource
+func (t *TUI) deleteSelectedResource() {
+	resource := t.getSelectedResource()
+	if resource == nil {
+		return
+	}
+
+	var name, resourceType string
+	switch r := resource.(type) {
+	case v1.Pod:
+		name = r.Name
+		resourceType = "pod"
+	case appsv1.Deployment:
+		name = r.Name
+		resourceType = "deployment"
+	case v1.Service:
+		name = r.Name
+		resourceType = "service"
+	case v1.ConfigMap:
+		name = r.Name
+		resourceType = "configmap"
+	default:
+		return
+	}
+
+	// Show confirmation
+	confirmMsg := fmt.Sprintf("Delete %s '%s'? (y/N)", resourceType, name)
+	t.drawText(0, 1, 50, confirmMsg, tcell.StyleDefault.Background(tcell.ColorYellow).Foreground(tcell.ColorBlack))
+	t.screen.Show()
+
+	// Wait for confirmation
+	event := t.screen.PollEvent()
+	if ev, ok := event.(*tcell.EventKey); ok && ev.Rune() == 'y' {
+		var err error
+		switch r := resource.(type) {
+		case v1.Pod:
+			err = k8s.DeletePod(t.clientset, t.namespace, r.Name)
+		case appsv1.Deployment:
+			err = k8s.DeleteDeployment(t.clientset, t.namespace, r.Name)
+		case v1.Service:
+			err = k8s.DeleteService(t.clientset, t.namespace, r.Name)
+		case v1.ConfigMap:
+			err = k8s.DeleteConfigMap(t.clientset, t.namespace, r.Name)
+		}
+
+		if err != nil {
+			klog.Errorf("Failed to delete %s: %v", resourceType, err)
+			errorMsg := fmt.Sprintf("Error deleting %s: %v", resourceType, err)
+			t.drawText(0, 3, 80, errorMsg, tcell.StyleDefault.Background(tcell.ColorRed).Foreground(tcell.ColorWhite))
+			t.screen.Show()
+			time.Sleep(2 * time.Second)
+		} else {
+			// Reload resources
+			t.refreshData()
+		}
+	}
+}
+
+// drawSplitVertical draws a vertical split layout (left: list, right: details)
+func (t *TUI) drawSplitVertical(width, height int) {
+	leftWidth := int(float64(width) * t.splitRatio)
+	rightWidth := width - leftWidth - 1 // -1 for separator
+
+	// Draw left panel (list view)
+	t.drawPanel(0, 0, leftWidth, height, true, ViewModeList)
+
+	// Draw separator
+	for y := 0; y < height; y++ {
+		t.screen.SetContent(leftWidth, y, '│', nil, tcell.StyleDefault)
+	}
+
+	// Draw right panel (details view)
+	t.drawPanel(leftWidth+1, 0, rightWidth, height, false, ViewModeDetails)
+}
+
+// drawSplitHorizontal draws a horizontal split layout (top: list, bottom: details)
+func (t *TUI) drawSplitHorizontal(width, height int) {
+	topHeight := int(float64(height) * t.splitRatio)
+	bottomHeight := height - topHeight - 1 // -1 for separator
+
+	// Draw top panel (list view)
+	t.drawPanel(0, 0, width, topHeight, true, ViewModeList)
+
+	// Draw separator
+	for x := 0; x < width; x++ {
+		t.screen.SetContent(x, topHeight, '─', nil, tcell.StyleDefault)
+	}
+
+	// Draw bottom panel (details view)
+	t.drawPanel(0, topHeight+1, width, bottomHeight, false, ViewModeDetails)
+}
+
+// drawPanel draws a panel with specific view mode
+func (t *TUI) drawPanel(x, y, width, height int, isLeftPanel bool, viewMode ViewMode) {
+	// For now, use simplified implementation
+	// In a full implementation, we'd need to offset all drawing operations
+
+	switch viewMode {
+	case ViewModeList:
+		// Draw a simple list in the panel
+		t.drawText(x, y, width, "List View", tcell.StyleDefault.Background(t.theme.header).Foreground(tcell.ColorWhite))
+		filtered := t.getFilteredResources()
+		for i := 0; i < len(filtered) && i < height-2; i++ {
+			resource := filtered[i]
+			name := t.getResourceName(resource)
+			style := tcell.StyleDefault
+			if isLeftPanel && i == t.selected {
+				style = style.Background(t.theme.selected)
+			}
+			t.drawText(x, y+1+i, width, name, style)
+		}
+	case ViewModeDetails:
+		// Draw details of selected resource
+		resource := t.getSelectedResource()
+		if resource != nil {
+			t.drawText(x, y, width, "Details View", tcell.StyleDefault.Background(t.theme.header).Foreground(tcell.ColorWhite))
+			details := t.getResourceDetails(resource)
+			for i, line := range details {
+				if i >= height-2 {
+					break
+				}
+				t.drawText(x, y+1+i, width, line, tcell.StyleDefault)
+			}
+		}
+	}
+}
+
+// drawListView draws the resource list view
+func (t *TUI) drawListView(width, height int) {
+	// Draw header
+	t.drawHeader(width)
 
 	// Draw search bar if filter is active
-	if t.filter != "" {
+	if t.filter != "" || t.filterMode {
 		t.drawSearchBar(width, 2)
 	}
 
 	// Draw main content area
-	contentStartY := 2
-	if t.filter != "" {
-		contentStartY = 4
+	contentStartY := 4
+	if t.filter != "" || t.filterMode {
+		contentStartY = 6
 	}
-	contentHeight := height - 6 // Reserve space for title, status, and footer
-	t.drawPodTable(width, contentHeight, contentStartY)
+	contentHeight := height - contentStartY - 2 // Leave space for status and footer
+
+	t.drawResourceTable(width, contentHeight, contentStartY)
 
 	// Draw status bar
-	t.drawStatusBar(width, height-3)
+	t.drawStatusBar(width, height-2)
 
-	// Draw footer with instructions
+	// Draw footer
 	t.drawFooter(width, height-1)
+}
+
+// drawHeader draws the header with resource tabs
+func (t *TUI) drawHeader(width int) {
+	// Title
+	title := " 🚀 KGO - Kubernetes Dashboard "
+	padding := (width - len(title)) / 2
+	if padding < 0 {
+		padding = 0
+	}
+	headerStyle := tcell.StyleDefault.Background(t.theme.header).Foreground(tcell.ColorWhite).Bold(true)
+	t.drawText(0, 0, width, strings.Repeat(" ", padding)+title+strings.Repeat(" ", width-padding-len(title)), headerStyle)
+
+	// Resource tabs
+	tabs := []string{" 1.Pods ", " 2.Deployments ", " 3.Services ", " 4.ConfigMaps "}
+	tabsY := 2
+
+	x := 0
+	for i, tab := range tabs {
+		style := tcell.StyleDefault.Background(t.theme.background).Foreground(t.theme.foreground)
+		if ResourceType(i) == t.currentView {
+			style = style.Background(t.theme.accent).Foreground(tcell.ColorWhite).Bold(true)
+		}
+		t.drawText(x, tabsY, len(tab), tab, style)
+		x += len(tab)
+	}
+}
+
+// drawResourceTable draws the resource table for current view
+func (t *TUI) drawResourceTable(width, height, startY int) {
+	filtered := t.getFilteredResources()
+
+	if len(filtered) == 0 {
+		t.drawText(0, startY, width, "No resources found", tcell.StyleDefault)
+		return
+	}
+
+	// Get table headers and column widths based on resource type
+	headers := t.getTableHeaders()
+	colWidths := t.getColumnWidths(width, len(headers))
+
+	// Draw table header
+	headerY := startY
+	headerText := "┌" + strings.Repeat("─", width-2) + "┐"
+	t.drawText(0, headerY, width, headerText, tcell.StyleDefault.Foreground(tcell.ColorGray))
+
+	headerLine := "│ "
+	for i, header := range headers {
+		headerLine += fmt.Sprintf("%-*s", colWidths[i], header)
+		if i < len(headers)-1 {
+			headerLine += " │ "
+		}
+	}
+	headerLine += " │"
+	t.drawText(0, headerY+1, width, headerLine, tcell.StyleDefault.Background(tcell.ColorGray).Foreground(tcell.ColorBlack).Bold(true))
+
+	// Draw separator
+	sepLine := "├" + strings.Repeat("─", width-2) + "┤"
+	t.drawText(0, headerY+2, width, sepLine, tcell.StyleDefault.Foreground(tcell.ColorGray))
+
+	// Draw resources
+	resourceStartY := headerY + 3
+	for i, resource := range filtered {
+		if i >= height-4 { // Leave space for borders
+			break
+		}
+
+		y := resourceStartY + i
+		style := tcell.StyleDefault
+
+		// Highlight selected resource
+		if i == t.selected {
+			style = style.Background(t.theme.selected).Foreground(tcell.ColorBlack).Bold(true)
+		}
+
+		line := t.formatResourceLine(resource, colWidths)
+		t.drawText(0, y, width, line, style)
+	}
+
+	// Draw table bottom border
+	if len(filtered) < height-4 {
+		bottomY := resourceStartY + len(filtered)
+		bottomLine := "└" + strings.Repeat("─", width-2) + "┘"
+		t.drawText(0, bottomY, width, bottomLine, tcell.StyleDefault.Foreground(tcell.ColorGray))
+	}
 }
 
 // drawTitleBar draws the application title
@@ -334,12 +1051,279 @@ func (t *TUI) formatPodTableLine(pod v1.Pod, colWidths []int) string {
 		colWidths[4], node)
 }
 
+// getFilteredResources returns filtered resources based on current view and filters
+func (t *TUI) getFilteredResources() []interface{} {
+	var resources []interface{}
+
+	// Get resources based on current view
+	switch t.currentView {
+	case ResourcePods:
+		for _, pod := range t.pods {
+			resources = append(resources, pod)
+		}
+	case ResourceDeployments:
+		for _, dep := range t.deployments {
+			resources = append(resources, dep)
+		}
+	case ResourceServices:
+		for _, svc := range t.services {
+			resources = append(resources, svc)
+		}
+	case ResourceConfigMaps:
+		for _, cm := range t.configMaps {
+			resources = append(resources, cm)
+		}
+	}
+
+	// Apply filters
+	if t.filter == "" && !t.filterMode {
+		return resources
+	}
+
+	var filtered []interface{}
+	for _, resource := range resources {
+		if t.matchesFilter(resource) {
+			filtered = append(filtered, resource)
+		}
+	}
+
+	return filtered
+}
+
+// matchesFilter checks if a resource matches the current filter
+func (t *TUI) matchesFilter(resource interface{}) bool {
+	if t.filter == "" && !t.filterMode {
+		return true
+	}
+
+	name := t.getResourceName(resource)
+	if name == "" {
+		return false
+	}
+
+	// Simple filter mode
+	if !t.filterMode {
+		if t.caseSensitive {
+			return strings.Contains(name, t.filter)
+		}
+		return strings.Contains(strings.ToLower(name), strings.ToLower(t.filter))
+	}
+
+	// Advanced filter mode - check global filter and column filters
+	match := true
+
+	// Global filter
+	if t.filter != "" {
+		if t.useRegex {
+			// TODO: Implement regex matching
+			if t.caseSensitive {
+				match = strings.Contains(name, t.filter)
+			} else {
+				match = strings.Contains(strings.ToLower(name), strings.ToLower(t.filter))
+			}
+		} else {
+			if t.caseSensitive {
+				match = strings.Contains(name, t.filter)
+			} else {
+				match = strings.Contains(strings.ToLower(name), strings.ToLower(t.filter))
+			}
+		}
+	}
+
+	// Column-specific filters
+	headers := t.getTableHeaders()
+	for i, colFilter := range t.columnFilters {
+		if colFilter == "" || i >= len(headers) {
+			continue
+		}
+
+		colValue := t.getResourceColumnValue(resource, i)
+		if t.useRegex {
+			// TODO: Implement regex matching for columns
+			if t.caseSensitive {
+				if !strings.Contains(colValue, colFilter) {
+					match = false
+					break
+				}
+			} else {
+				if !strings.Contains(strings.ToLower(colValue), strings.ToLower(colFilter)) {
+					match = false
+					break
+				}
+			}
+		} else {
+			if t.caseSensitive {
+				if !strings.Contains(colValue, colFilter) {
+					match = false
+					break
+				}
+			} else {
+				if !strings.Contains(strings.ToLower(colValue), strings.ToLower(colFilter)) {
+					match = false
+					break
+				}
+			}
+		}
+	}
+
+	if t.inverseFilter {
+		match = !match
+	}
+
+	return match
+}
+
+// getResourceName returns the name of a resource
+func (t *TUI) getResourceName(resource interface{}) string {
+	switch r := resource.(type) {
+	case v1.Pod:
+		return r.Name
+	case appsv1.Deployment:
+		return r.Name
+	case v1.Service:
+		return r.Name
+	case v1.ConfigMap:
+		return r.Name
+	default:
+		return ""
+	}
+}
+
+// getResourceColumnValue returns the value for a specific column of a resource
+func (t *TUI) getResourceColumnValue(resource interface{}, colIndex int) string {
+	switch r := resource.(type) {
+	case v1.Pod:
+		switch colIndex {
+		case 0:
+			return r.Name
+		case 1:
+			return string(r.Status.Phase)
+		case 2:
+			return t.getReadyCount(r)
+		case 3:
+			return t.formatDuration(time.Since(r.CreationTimestamp.Time))
+		case 4:
+			return r.Spec.NodeName
+		}
+	case appsv1.Deployment:
+		switch colIndex {
+		case 0:
+			return r.Name
+		case 1:
+			return fmt.Sprintf("%d/%d", r.Status.ReadyReplicas, r.Status.Replicas)
+		case 2:
+			return fmt.Sprintf("%d", r.Status.UpdatedReplicas)
+		case 3:
+			return fmt.Sprintf("%d", r.Status.AvailableReplicas)
+		case 4:
+			return t.formatDuration(time.Since(r.CreationTimestamp.Time))
+		}
+	case v1.Service:
+		switch colIndex {
+		case 0:
+			return r.Name
+		case 1:
+			return string(r.Spec.Type)
+		case 2:
+			return r.Spec.ClusterIP
+		case 3:
+			if len(r.Status.LoadBalancer.Ingress) > 0 {
+				return r.Status.LoadBalancer.Ingress[0].IP
+			}
+			return "<none>"
+		case 4:
+			ports := ""
+			for i, port := range r.Spec.Ports {
+				if i > 0 {
+					ports += ","
+				}
+				ports += fmt.Sprintf("%d", port.Port)
+			}
+			return ports
+		}
+	case v1.ConfigMap:
+		switch colIndex {
+		case 0:
+			return r.Name
+		case 1:
+			return fmt.Sprintf("%d", len(r.Data)+len(r.BinaryData))
+		case 2:
+			return t.formatDuration(time.Since(r.CreationTimestamp.Time))
+		}
+	}
+	return ""
+}
+
+// getTableHeaders returns table headers for the current resource type
+func (t *TUI) getTableHeaders() []string {
+	switch t.currentView {
+	case ResourcePods:
+		return []string{"Name", "Status", "Ready", "Age", "Node"}
+	case ResourceDeployments:
+		return []string{"Name", "Ready", "Up-to-date", "Available", "Age"}
+	case ResourceServices:
+		return []string{"Name", "Type", "Cluster-IP", "External-IP", "Ports"}
+	case ResourceConfigMaps:
+		return []string{"Name", "Data", "Age"}
+	default:
+		return []string{"Name", "Status", "Age"}
+	}
+}
+
+// getColumnWidths calculates column widths based on available space
+func (t *TUI) getColumnWidths(totalWidth, numColumns int) []int {
+	if numColumns == 0 {
+		return []int{}
+	}
+
+	// Account for borders and separators: 3 chars per column (│ space content space)
+	availableWidth := totalWidth - (numColumns*3 + 1) // +1 for final │
+	if availableWidth < numColumns*10 {               // Minimum 10 chars per column
+		availableWidth = numColumns * 10
+	}
+
+	// Distribute width evenly
+	widths := make([]int, numColumns)
+	baseWidth := availableWidth / numColumns
+	extra := availableWidth % numColumns
+
+	for i := 0; i < numColumns; i++ {
+		widths[i] = baseWidth
+		if i < extra {
+			widths[i]++
+		}
+	}
+
+	return widths
+}
+
+// formatResourceLine formats a resource into a table line
+func (t *TUI) formatResourceLine(resource interface{}, colWidths []int) string {
+	headers := t.getTableHeaders()
+	line := "│ "
+
+	for i := range headers {
+		value := t.getResourceColumnValue(resource, i)
+		if len(value) > colWidths[i] {
+			value = value[:colWidths[i]-3] + "..."
+		}
+		line += fmt.Sprintf("%-*s", colWidths[i], value)
+		if i < len(headers)-1 {
+			line += " │ "
+		}
+	}
+
+	line += " │"
+	return line
+}
+
 // drawStatusBar draws the status information bar
 func (t *TUI) drawStatusBar(width, y int) {
-	filteredPods := t.getFilteredPods()
-	status := fmt.Sprintf(" 📁 %s | 🎯 %d/%d pods", t.namespace, len(filteredPods), len(t.pods))
+	filtered := t.getFilteredResources()
+	total := t.getCurrentViewCount()
+	status := fmt.Sprintf(" 📁 %s | 🎯 %s | %d/%d items", t.namespace, t.currentView.DisplayName(), len(filtered), total)
 
-	if t.filter != "" {
+	if t.filter != "" || t.filterMode {
 		status += fmt.Sprintf(" | 🔍 '%s'", t.filter)
 	}
 
@@ -348,8 +1332,24 @@ func (t *TUI) drawStatusBar(width, y int) {
 		status += strings.Repeat(" ", width-len(status))
 	}
 
-	style := tcell.StyleDefault.Background(tcell.ColorDarkGreen).Foreground(tcell.ColorWhite)
+	style := tcell.StyleDefault.Background(t.theme.accent).Foreground(tcell.ColorWhite)
 	t.drawText(0, y, width, status, style)
+}
+
+// getCurrentViewCount returns the total count for the current view
+func (t *TUI) getCurrentViewCount() int {
+	switch t.currentView {
+	case ResourcePods:
+		return len(t.pods)
+	case ResourceDeployments:
+		return len(t.deployments)
+	case ResourceServices:
+		return len(t.services)
+	case ResourceConfigMaps:
+		return len(t.configMaps)
+	default:
+		return 0
+	}
 }
 
 // drawFooter draws the help/instruction footer
@@ -361,6 +1361,375 @@ func (t *TUI) drawFooter(width, y int) {
 
 	style := tcell.StyleDefault.Background(tcell.ColorDarkGray).Foreground(tcell.ColorWhite)
 	t.drawText(0, y, width, helpText, style)
+}
+
+// drawDetailsView draws the details view for selected resource
+func (t *TUI) drawDetailsView(width, height int) {
+	resource := t.getSelectedResource()
+	if resource == nil {
+		t.drawText(0, 0, width, "No resource selected", tcell.StyleDefault)
+		return
+	}
+
+	// Header
+	header := fmt.Sprintf(" 📋 %s Details ", t.currentView.DisplayName())
+	t.drawText(0, 0, width, header, tcell.StyleDefault.Background(t.theme.header).Foreground(tcell.ColorWhite).Bold(true))
+
+	// Details content
+	details := t.getResourceDetails(resource)
+	y := 2
+	for _, line := range details {
+		if y >= height-2 {
+			break
+		}
+		t.drawText(0, y, width, line, tcell.StyleDefault)
+		y++
+	}
+
+	// Footer
+	footer := " ESC Back │ y YAML │ l Logs (pods only) "
+	t.drawText(0, height-1, width, footer, tcell.StyleDefault.Background(t.theme.background).Foreground(t.theme.foreground))
+}
+
+// drawYAMLView draws the YAML view for selected resource
+func (t *TUI) drawYAMLView(width, height int) {
+	resource := t.getSelectedResource()
+	if resource == nil {
+		t.drawText(0, 0, width, "No resource selected", tcell.StyleDefault)
+		return
+	}
+
+	// Header
+	header := fmt.Sprintf(" 📄 %s YAML ", t.currentView.DisplayName())
+	t.drawText(0, 0, width, header, tcell.StyleDefault.Background(t.theme.header).Foreground(tcell.ColorWhite).Bold(true))
+
+	// YAML content
+	yaml := t.getResourceYAML(resource)
+	lines := strings.Split(yaml, "\n")
+
+	y := 2
+	for i := t.detailsScroll; i < len(lines) && y < height-2; i++ {
+		line := lines[i]
+		if len(line) > width {
+			line = line[:width-3] + "..."
+		}
+		t.drawText(0, y, width, line, tcell.StyleDefault)
+		y++
+	}
+
+	// Footer
+	footer := " ESC Back │ ↑↓ Scroll "
+	t.drawText(0, height-1, width, footer, tcell.StyleDefault.Background(t.theme.background).Foreground(t.theme.foreground))
+}
+
+// drawLogsView draws the logs view for selected pod
+func (t *TUI) drawLogsView(width, height int) {
+	if t.currentView != ResourcePods {
+		t.drawText(0, 0, width, "Logs only available for pods", tcell.StyleDefault)
+		return
+	}
+
+	resource := t.getSelectedResource()
+	pod, ok := resource.(v1.Pod)
+	if !ok {
+		t.drawText(0, 0, width, "No pod selected", tcell.StyleDefault)
+		return
+	}
+
+	// Header
+	header := fmt.Sprintf(" 📋 Pod Logs: %s ", pod.Name)
+	t.drawText(0, 0, width, header, tcell.StyleDefault.Background(t.theme.header).Foreground(tcell.ColorWhite).Bold(true))
+
+	// Logs content (placeholder for now)
+	logs := []string{
+		"Log streaming not yet implemented...",
+		"Use 'kubectl logs' command for now.",
+		"",
+		fmt.Sprintf("Pod: %s", pod.Name),
+		fmt.Sprintf("Namespace: %s", pod.Namespace),
+		fmt.Sprintf("Status: %s", pod.Status.Phase),
+	}
+
+	y := 2
+	for i := t.logsScroll; i < len(logs) && y < height-2; i++ {
+		line := logs[i]
+		if len(line) > width {
+			line = line[:width-3] + "..."
+		}
+		t.drawText(0, y, width, line, tcell.StyleDefault)
+		y++
+	}
+
+	// Footer
+	footer := " ESC Back │ ↑↓ Scroll "
+	t.drawText(0, height-1, width, footer, tcell.StyleDefault.Background(t.theme.background).Foreground(t.theme.foreground))
+}
+
+// drawRelationshipsView draws the relationships view showing resource connections
+func (t *TUI) drawRelationshipsView(width, height int) {
+	// Header
+	header := " 🔗 Resource Relationships "
+	t.drawText(0, 0, width, header, tcell.StyleDefault.Background(t.theme.header).Foreground(tcell.ColorWhite).Bold(true))
+
+	// Get all relationships
+	relationships := t.getResourceRelationships()
+
+	if len(relationships) == 0 {
+		t.drawText(0, 2, width, "No relationships found", tcell.StyleDefault)
+		return
+	}
+
+	// Display relationships
+	y := 2
+	for i := t.relationshipsScroll; i < len(relationships) && y < height-2; i++ {
+		rel := relationships[i]
+		line := fmt.Sprintf("%s → %s (%s)", rel.From, rel.To, rel.RelationType)
+		if len(line) > width {
+			line = line[:width-3] + "..."
+		}
+		t.drawText(0, y, width, line, tcell.StyleDefault)
+		y++
+	}
+
+	// Footer
+	footer := " ESC Back │ ↑↓ Scroll "
+	t.drawText(0, height-1, width, footer, tcell.StyleDefault.Background(t.theme.background).Foreground(t.theme.foreground))
+}
+
+// getSelectedResource returns the currently selected resource
+func (t *TUI) getSelectedResource() interface{} {
+	filtered := t.getFilteredResources()
+	if t.selected < 0 || t.selected >= len(filtered) {
+		return nil
+	}
+	return filtered[t.selected]
+}
+
+// getResourceDetails returns formatted details for a resource
+func (t *TUI) getResourceDetails(resource interface{}) []string {
+	switch r := resource.(type) {
+	case v1.Pod:
+		return t.getPodDetails(r)
+	case appsv1.Deployment:
+		return t.getDeploymentDetails(r)
+	case v1.Service:
+		return t.getServiceDetails(r)
+	case v1.ConfigMap:
+		return t.getConfigMapDetails(r)
+	}
+	return []string{"Unknown resource type"}
+}
+
+// getResourceYAML returns YAML representation of a resource
+func (t *TUI) getResourceYAML(resource interface{}) string {
+	data, err := json.MarshalIndent(resource, "", "  ")
+	if err != nil {
+		return fmt.Sprintf("Error marshaling YAML: %v", err)
+	}
+	return string(data)
+}
+
+// getResourceRelationships returns all resource relationships
+func (t *TUI) getResourceRelationships() []Relationship {
+	var relationships []Relationship
+
+	// Pod relationships
+	relationships = append(relationships, t.getPodRelationships()...)
+
+	// Deployment relationships
+	relationships = append(relationships, t.getDeploymentRelationships()...)
+
+	// Service relationships
+	relationships = append(relationships, t.getServiceRelationships()...)
+
+	// ConfigMap relationships
+	relationships = append(relationships, t.getConfigMapRelationships()...)
+
+	return relationships
+}
+
+// getPodRelationships returns relationships for pods
+func (t *TUI) getPodRelationships() []Relationship {
+	var relationships []Relationship
+
+	for _, pod := range t.pods {
+		// Pod to Deployment relationship (via owner references)
+		for _, owner := range pod.OwnerReferences {
+			if owner.Kind == "Deployment" {
+				relationships = append(relationships, Relationship{
+					From:         pod.Name,
+					To:           owner.Name,
+					RelationType: "owned-by",
+				})
+			}
+		}
+
+		// Pod to Service relationship (via selectors)
+		for _, svc := range t.services {
+			if t.podMatchesService(pod, svc) {
+				relationships = append(relationships, Relationship{
+					From:         pod.Name,
+					To:           svc.Name,
+					RelationType: "exposed-by",
+				})
+			}
+		}
+	}
+
+	return relationships
+}
+
+// getDeploymentRelationships returns relationships for deployments
+func (t *TUI) getDeploymentRelationships() []Relationship {
+	var relationships []Relationship
+
+	for _, dep := range t.deployments {
+		// Find pods owned by this deployment
+		for _, pod := range t.pods {
+			for _, owner := range pod.OwnerReferences {
+				if owner.Kind == "Deployment" && owner.Name == dep.Name {
+					relationships = append(relationships, Relationship{
+						From:         dep.Name,
+						To:           pod.Name,
+						RelationType: "owns",
+					})
+				}
+			}
+		}
+	}
+
+	return relationships
+}
+
+// getServiceRelationships returns relationships for services
+func (t *TUI) getServiceRelationships() []Relationship {
+	var relationships []Relationship
+
+	for _, svc := range t.services {
+		// Find pods exposed by this service
+		for _, pod := range t.pods {
+			if t.podMatchesService(pod, svc) {
+				relationships = append(relationships, Relationship{
+					From:         svc.Name,
+					To:           pod.Name,
+					RelationType: "exposes",
+				})
+			}
+		}
+	}
+
+	return relationships
+}
+
+// getConfigMapRelationships returns relationships for configmaps
+func (t *TUI) getConfigMapRelationships() []Relationship {
+	var relationships []Relationship
+
+	// ConfigMaps are referenced by pods via volumes or env
+	// This is a simplified implementation
+	for _, cm := range t.configMaps {
+		// Check if any pod references this configmap
+		for _, pod := range t.pods {
+			if t.podUsesConfigMap(pod, cm) {
+				relationships = append(relationships, Relationship{
+					From:         pod.Name,
+					To:           cm.Name,
+					RelationType: "uses",
+				})
+			}
+		}
+	}
+
+	return relationships
+}
+
+// podMatchesService checks if a pod matches a service selector
+func (t *TUI) podMatchesService(pod v1.Pod, svc v1.Service) bool {
+	for key, value := range svc.Spec.Selector {
+		if pod.Labels[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+// podUsesConfigMap checks if a pod uses a configmap
+func (t *TUI) podUsesConfigMap(pod v1.Pod, cm v1.ConfigMap) bool {
+	// Check volumes
+	for _, volume := range pod.Spec.Volumes {
+		if volume.ConfigMap != nil && volume.ConfigMap.Name == cm.Name {
+			return true
+		}
+	}
+
+	// Check environment variables
+	for _, container := range pod.Spec.Containers {
+		for _, env := range container.Env {
+			if env.ValueFrom != nil && env.ValueFrom.ConfigMapKeyRef != nil && env.ValueFrom.ConfigMapKeyRef.Name == cm.Name {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// getPodDetails returns formatted details for a pod
+func (t *TUI) getPodDetails(pod v1.Pod) []string {
+	return []string{
+		fmt.Sprintf("Name: %s", pod.Name),
+		fmt.Sprintf("Namespace: %s", pod.Namespace),
+		fmt.Sprintf("Status: %s", pod.Status.Phase),
+		fmt.Sprintf("Node: %s", pod.Spec.NodeName),
+		fmt.Sprintf("Created: %s", pod.CreationTimestamp.Format("2006-01-02 15:04:05")),
+		"",
+		"Containers:",
+	}
+}
+
+// getDeploymentDetails returns formatted details for a deployment
+func (t *TUI) getDeploymentDetails(dep appsv1.Deployment) []string {
+	return []string{
+		fmt.Sprintf("Name: %s", dep.Name),
+		fmt.Sprintf("Namespace: %s", dep.Namespace),
+		fmt.Sprintf("Replicas: %d", dep.Status.Replicas),
+		fmt.Sprintf("Ready: %d", dep.Status.ReadyReplicas),
+		fmt.Sprintf("Available: %d", dep.Status.AvailableReplicas),
+		fmt.Sprintf("Updated: %d", dep.Status.UpdatedReplicas),
+		fmt.Sprintf("Created: %s", dep.CreationTimestamp.Format("2006-01-02 15:04:05")),
+	}
+}
+
+// getServiceDetails returns formatted details for a service
+func (t *TUI) getServiceDetails(svc v1.Service) []string {
+	return []string{
+		fmt.Sprintf("Name: %s", svc.Name),
+		fmt.Sprintf("Namespace: %s", svc.Namespace),
+		fmt.Sprintf("Type: %s", svc.Spec.Type),
+		fmt.Sprintf("Cluster IP: %s", svc.Spec.ClusterIP),
+		fmt.Sprintf("Created: %s", svc.CreationTimestamp.Format("2006-01-02 15:04:05")),
+		"",
+		"Ports:",
+	}
+}
+
+// getConfigMapDetails returns formatted details for a configmap
+func (t *TUI) getConfigMapDetails(cm v1.ConfigMap) []string {
+	details := []string{
+		fmt.Sprintf("Name: %s", cm.Name),
+		fmt.Sprintf("Namespace: %s", cm.Namespace),
+		fmt.Sprintf("Data items: %d", len(cm.Data)),
+		fmt.Sprintf("Binary data items: %d", len(cm.BinaryData)),
+		fmt.Sprintf("Created: %s", cm.CreationTimestamp.Format("2006-01-02 15:04:05")),
+		"",
+		"Data keys:",
+	}
+
+	for key := range cm.Data {
+		details = append(details, fmt.Sprintf("  - %s", key))
+	}
+
+	return details
 }
 
 // drawHelpScreen shows the help screen
@@ -375,28 +1744,40 @@ func (t *TUI) drawHelpScreen(width, height int) {
 	helpLines := []string{
 		"",
 		" Navigation:",
-		"   ↑↓          Navigate through pods",
-		"   Enter       Show pod details",
+		"   ↑↓, j/k     Navigate through resources",
+		"   Tab         Switch between resource types",
+		"   1-4         Jump to: Pods, Deployments, Services, ConfigMaps",
+		"   Enter       Show resource details",
+		"",
+		" View Modes:",
+		"   v           Cycle view modes (List → Details → YAML → Logs → Relationships)",
+		"   y           YAML view",
+		"   l           Logs view (pods only)",
+		"   r           Relationships view",
+		"",
+		" Split Pane:",
+		"   s           Toggle split-pane mode",
+		"   S           Switch split layout (vertical/horizontal)",
 		"",
 		" Actions:",
-		"   r, F5       Refresh pod list",
-		"   d           Delete selected pod",
-		"   c           Create new pod",
+		"   r, F5       Refresh all resources",
+		"   d           Delete selected resource",
+		"   c           Create new resource",
 		"   n           Change namespace",
 		"",
 		" Search & Filter:",
-		"   /           Search pods by name",
+		"   /           Search resources by name",
 		"   f           Clear current filter",
 		"",
 		" General:",
-		"   h           Show this help",
+		"   ?, h        Show this help",
 		"   q, Esc      Quit application",
 		"",
 		" Status Colors:",
-		"   🟢 Green    Running",
+		"   🟢 Green    Running/Ready",
 		"   🟡 Yellow   Pending",
-		"   🔴 Red      Failed",
-		"   🔵 Blue     Succeeded",
+		"   🔴 Red      Failed/Error",
+		"   🔵 Blue     Succeeded/Complete",
 		"",
 		" Press any key to return...",
 	}
@@ -415,7 +1796,7 @@ func (t *TUI) drawHelpScreen(width, height int) {
 func (t *TUI) drawLoadingScreen(width, height int) {
 	t.screen.Clear()
 
-	loadingText := " 🔄 Loading pods..."
+	loadingText := " 🔄 Loading Kubernetes resources..."
 	y := height / 2
 	x := (width - len(loadingText)) / 2
 
@@ -562,20 +1943,52 @@ func (t *TUI) deleteSelectedPod() {
 
 // changeNamespace allows changing the current namespace
 func (t *TUI) changeNamespace() {
-	input := t.namespace
-	cursor := len(input)
+	// Fetch available namespaces
+	namespaces, err := k8s.ListNamespaces(t.clientset)
+	if err != nil {
+		// Show error message
+		t.screen.Clear()
+		t.drawText(0, 0, 80, "Error: Failed to list namespaces: "+err.Error(), tcell.StyleDefault.Background(tcell.ColorRed).Foreground(tcell.ColorWhite))
+		t.drawText(0, 2, 80, "Press any key to continue...", tcell.StyleDefault)
+		t.screen.Show()
+		t.screen.PollEvent()
+		return
+	}
 
+	if len(namespaces) == 0 {
+		// Show error message
+		t.screen.Clear()
+		t.drawText(0, 0, 80, "Error: No namespaces found", tcell.StyleDefault.Background(tcell.ColorRed).Foreground(tcell.ColorWhite))
+		t.drawText(0, 2, 80, "Press any key to continue...", tcell.StyleDefault)
+		t.screen.Show()
+		t.screen.PollEvent()
+		return
+	}
+
+	// Create list of namespace names
+	var namespaceNames []string
+	for _, ns := range namespaces {
+		namespaceNames = append(namespaceNames, ns.Name)
+	}
+
+	// Simple selection dialog
+	selectedIndex := 0
 	for {
 		t.screen.Clear()
 
-		prompt := "Enter namespace (current: " + t.namespace + "): " + input
-		t.drawText(0, 0, 80, prompt, tcell.StyleDefault)
+		t.drawText(0, 0, 80, "Select Namespace (↑↓ to navigate, Enter to select, Esc to cancel):", tcell.StyleDefault.Bold(true))
 
-		// Show cursor
-		if cursor < len(input) {
-			t.screen.SetContent(len(prompt)-len(input)+cursor, 0, '_', nil, tcell.StyleDefault)
-		} else {
-			t.drawText(len(prompt), 0, 1, "_", tcell.StyleDefault)
+		// Show namespaces
+		for i, name := range namespaceNames {
+			style := tcell.StyleDefault
+			if i == selectedIndex {
+				style = style.Background(tcell.ColorBlue).Foreground(tcell.ColorWhite).Bold(true)
+			}
+			prefix := "  "
+			if i == selectedIndex {
+				prefix = "▶ "
+			}
+			t.drawText(0, i+2, 80, prefix+name, style)
 		}
 
 		t.screen.Show()
@@ -585,24 +1998,22 @@ func (t *TUI) changeNamespace() {
 		case *tcell.EventKey:
 			switch ev.Key() {
 			case tcell.KeyEnter:
-				if input != "" {
-					t.namespace = input
-					t.loadPods()
+				newNamespace := namespaceNames[selectedIndex]
+				if newNamespace != t.namespace {
+					t.namespace = newNamespace
+					t.refreshData()
 				}
 				return
 			case tcell.KeyEscape:
 				return
-			case tcell.KeyBackspace, tcell.KeyBackspace2:
-				if len(input) > 0 {
-					input = input[:len(input)-1]
-					cursor--
-					if cursor < 0 {
-						cursor = 0
-					}
+			case tcell.KeyUp:
+				if selectedIndex > 0 {
+					selectedIndex--
 				}
-			case tcell.KeyRune:
-				input += string(ev.Rune())
-				cursor++
+			case tcell.KeyDown:
+				if selectedIndex < len(namespaceNames)-1 {
+					selectedIndex++
+				}
 			}
 		}
 	}

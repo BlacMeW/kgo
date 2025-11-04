@@ -1,0 +1,253 @@
+syntax = "proto3";
+
+package k8s;
+option go_package = "k8s-dashboard/proto";
+
+import "google/protobuf/empty.proto";
+
+// Kubernetes gRPC service for async operations
+service K8sService {
+  // Resource listing operations
+  rpc ListPods(ListRequest) returns (PodListResponse);
+  rpc ListDeployments(ListRequest) returns (DeploymentListResponse);
+  rpc ListServices(ListRequest) returns (ServiceListResponse);
+  rpc ListConfigMaps(ListRequest) returns (ConfigMapListResponse);
+
+  // Resource CRUD operations
+  rpc CreatePod(CreatePodRequest) returns (PodResponse);
+  rpc UpdatePod(UpdatePodRequest) returns (PodResponse);
+  rpc DeletePod(DeleteRequest) returns (google.protobuf.Empty);
+
+  rpc CreateDeployment(CreateDeploymentRequest) returns (DeploymentResponse);
+  rpc UpdateDeployment(UpdateDeploymentRequest) returns (DeploymentResponse);
+  rpc DeleteDeployment(DeleteRequest) returns (google.protobuf.Empty);
+
+  rpc CreateService(CreateServiceRequest) returns (ServiceResponse);
+  rpc UpdateService(UpdateServiceRequest) returns (ServiceResponse);
+  rpc DeleteService(DeleteRequest) returns (google.protobuf.Empty);
+
+  rpc CreateConfigMap(CreateConfigMapRequest) returns (ConfigMapResponse);
+  rpc UpdateConfigMap(UpdateConfigMapRequest) returns (ConfigMapResponse);
+  rpc DeleteConfigMap(DeleteRequest) returns (google.protobuf.Empty);
+
+  // Namespace operations
+  rpc ListNamespaces(google.protobuf.Empty) returns (NamespaceListResponse);
+
+  // Pod logs and exec
+  rpc GetPodLogs(PodLogsRequest) returns (LogsResponse);
+  rpc ExecPod(ExecRequest) returns (stream ExecResponse);
+}
+
+// Common request/response messages
+message ListRequest {
+  string namespace = 1;
+}
+
+message DeleteRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// Pod messages
+message PodListResponse {
+  repeated Pod pods = 1;
+}
+
+message Pod {
+  string name = 1;
+  string namespace = 2;
+  string status = 3;
+  string node = 4;
+  string age = 5;
+  repeated Container containers = 6;
+  map<string, string> labels = 7;
+}
+
+message Container {
+  string name = 1;
+  string image = 2;
+  string status = 3;
+  repeated Port ports = 4;
+}
+
+message Port {
+  string protocol = 1;
+  int32 container_port = 2;
+}
+
+message CreatePodRequest {
+  string namespace = 1;
+  PodSpec spec = 2;
+}
+
+message PodSpec {
+  string name = 1;
+  map<string, string> labels = 2;
+  repeated ContainerSpec containers = 3;
+}
+
+message ContainerSpec {
+  string name = 1;
+  string image = 2;
+  repeated PortSpec ports = 3;
+}
+
+message PortSpec {
+  string protocol = 1;
+  int32 container_port = 2;
+}
+
+message UpdatePodRequest {
+  string namespace = 1;
+  string name = 2;
+  PodSpec spec = 3;
+}
+
+message PodResponse {
+  Pod pod = 1;
+}
+
+// Deployment messages
+message DeploymentListResponse {
+  repeated Deployment deployments = 1;
+}
+
+message Deployment {
+  string name = 1;
+  string namespace = 2;
+  int32 replicas = 3;
+  int32 ready_replicas = 4;
+  int32 available_replicas = 5;
+  string age = 6;
+  map<string, string> labels = 7;
+}
+
+message CreateDeploymentRequest {
+  string namespace = 1;
+  DeploymentSpec spec = 2;
+}
+
+message DeploymentSpec {
+  string name = 1;
+  int32 replicas = 2;
+  map<string, string> labels = 3;
+  PodSpec template = 4;
+}
+
+message UpdateDeploymentRequest {
+  string namespace = 1;
+  string name = 2;
+  DeploymentSpec spec = 3;
+}
+
+message DeploymentResponse {
+  Deployment deployment = 1;
+}
+
+// Service messages
+message ServiceListResponse {
+  repeated Service services = 1;
+}
+
+message Service {
+  string name = 1;
+  string namespace = 2;
+  string type = 3;
+  string cluster_ip = 4;
+  string external_ip = 5;
+  repeated string ports = 6;
+  string age = 7;
+  map<string, string> labels = 8;
+}
+
+message CreateServiceRequest {
+  string namespace = 1;
+  ServiceSpec spec = 2;
+}
+
+message ServiceSpec {
+  string name = 1;
+  string type = 2;
+  repeated PortSpec ports = 3;
+  map<string, string> selector = 4;
+}
+
+message UpdateServiceRequest {
+  string namespace = 1;
+  string name = 2;
+  ServiceSpec spec = 3;
+}
+
+message ServiceResponse {
+  Service service = 1;
+}
+
+// ConfigMap messages
+message ConfigMapListResponse {
+  repeated ConfigMap configmaps = 1;
+}
+
+message ConfigMap {
+  string name = 1;
+  string namespace = 2;
+  map<string, string> data = 3;
+  string age = 4;
+  map<string, string> labels = 5;
+}
+
+message CreateConfigMapRequest {
+  string namespace = 1;
+  ConfigMapSpec spec = 2;
+}
+
+message ConfigMapSpec {
+  string name = 1;
+  map<string, string> data = 2;
+  map<string, string> labels = 3;
+}
+
+message UpdateConfigMapRequest {
+  string namespace = 1;
+  string name = 2;
+  ConfigMapSpec spec = 3;
+}
+
+message ConfigMapResponse {
+  ConfigMap configmap = 1;
+}
+
+// Namespace messages
+message NamespaceListResponse {
+  repeated Namespace namespaces = 1;
+}
+
+message Namespace {
+  string name = 1;
+  string status = 2;
+  string age = 3;
+}
+
+// Pod logs and exec messages
+message PodLogsRequest {
+  string namespace = 1;
+  string pod_name = 2;
+  string container_name = 3;
+  int32 tail_lines = 4;
+  bool follow = 5;
+}
+
+message LogsResponse {
+  string logs = 1;
+}
+
+message ExecRequest {
+  string namespace = 1;
+  string pod_name = 2;
+  string container_name = 3;
+  string command = 4;
+}
+
+message ExecResponse {
+  string output = 1;
+  bool is_error = 2;
+}
